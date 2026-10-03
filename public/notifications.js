@@ -1,0 +1,132 @@
+import {prepareNotificationWorker} from './notification-worker.js';
+const enableButton=document.getElementById('enable-notifications'),installButton=document.getElementById('install-app'),testButton=document.getElementById('test-notification'),stopButton=document.getElementById('stop-reminders'),statusText=document.getElementById('notification-status');
+const localTestButton=document.getElementById('local-notification-test'),localTestStatus=document.getElementById('local-test-status');
+const scheduledButton=document.getElementById('scheduled-notification-test'),scheduledStatus=document.getElementById('scheduled-test-status');
+const repairButton=document.getElementById('repair-connection'),repairStatus=document.getElementById('repair-status');
+let testCooldown=0,cooldownTimer=null;
+const isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+const isAndroid=/Android/i.test(navigator.userAgent);
+let standalone=window.matchMedia('(display-mode: standalone)').matches||navigator.standalone;
+let deferredInstallPrompt=null;
+const installDialog=document.getElementById('install-dialog');
+const installHint=document.getElementById('install-hint');
+let config=null,registration=null,device=null,busy=false;
+try{device=JSON.parse(localStorage.getItem('campus-pause-device')||'null');const hour=localStorage.getItem('campus-pause-time');if(['18','19','20'].includes(hour))document.getElementById('reminder-time').value=hour;}catch{}
+function headers(){return {'Content-Type':'application/json',...(device?{'X-Device-Id':device.id,'Authorization':'Bearer '+device.token}:{})};}
+async function api(path,method='GET',body){const response=await fetch(path,{method,headers:headers(),...(body?{body:JSON.stringify(body)}:{})});const data=await response.json();if(!response.ok)throw Object.assign(Error(data.error),{status:response.status,retryAfter:data.retryAfter,dailyLimit:data.dailyLimit,retryAt:data.retryAt});return data;}
+function state(){
+ document.getElementById('scheduler-note').hidden=!!config?.scheduler?.healthy;
+ testButton.hidden=!device;stopButton.hidden=!device;enableButton.hidden=!!device;installButton.hidden=true;installHint.hidden=true;enableButton.disabled=false;
+ localTestButton.hidden=!device||!(window.isSecureContext&&'serviceWorker' in navigator&&'Notification' in window&&Notification.permission==='granted'&&(!isIOS||standalone));
+ scheduledButton.hidden=localTestButton.hidden;
+ scheduledButton.disabled=!config?.scheduler?.testReady;
+ if(!scheduledButton.hidden&&!config?.scheduler?.testReady)scheduledStatus.textContent='Closed-app testing will be available when the background scheduler is connected.';
+ repairButton.hidden=!device;
+ if(device){statusText.textContent=config?.scheduler?.healthy?'Reminders active for this device.':'Notifications are allowed. You can test delivery; automatic reminders are not active yet.';return;}
+ if(isIOS&&!standalone){enableButton.hidden=true;installButton.hidden=false;installButton.textContent='Add to Home Screen';installHint.hidden=false;installHint.textContent='iPhone users: this works in Safari or Chrome. Tap the button for the Share → Add to Home Screen steps.';statusText.textContent='Add it once, then open the Home Screen icon to enable reminders.';return;}
+ if(!window.isSecureContext||!('Notification' in window)||!('serviceWorker' in navigator)||!('PushManager' in window)){enableButton.disabled=true;statusText.textContent='Push reminders are unavailable in this browser. You can still read the calendar.';return;}
+ if(isAndroid&&!standalone){installHint.hidden=false;installHint.textContent=deferredInstallPrompt?'Android users: your browser can open the install prompt here. If it does not appear, use the browser menu and choose Install app or Add to Home Screen.':'Android users can enable notifications directly. Installing the app is optional; if your browser offers Install app or Add to Home Screen, you can use it from the browser menu.';}
+ if(deferredInstallPrompt&&!standalone)installButton.hidden=false;
+ enableButton.disabled=!config;enableButton.textContent=Notification.permission==='denied'?'How to unblock notifications':'Enable notifications';statusText.textContent=Notification.permission==='denied'?'Open your browser’s site permissions and allow notifications for this site, then return here.':!config?'Connecting to reminder service…':'Allow notifications to register this device. Scheduled delivery is still pending setup.';
+}
+const base64=bytes=>btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const decode=s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
+async function saveDevice(sub,token){const result=await api('/api/device','POST',{subscription:sub.toJSON(),token,session:document.getElementById('session').value,hour:+document.getElementById('reminder-time').value});device={id:result.id,token};localStorage.setItem('campus-pause-device',JSON.stringify(device));config.scheduler=result.scheduler;state();}
+function showInstallGuide(){if(installDialog?.showModal)installDialog.showModal();else statusText.textContent='Open Safari’s Share menu, choose Add to Home Screen, then open the new icon.';}
+window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstallPrompt=event;state();});
+window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;standalone=true;state();statusText.textContent='Campus Pause was added. Open it from your Home Screen to enable reminders.';});
+installButton.addEventListener('click',async()=>{
+ if(busy)return;
+ if(deferredInstallPrompt){busy=true;installButton.disabled=true;try{deferredInstallPrompt.prompt();const result=await deferredInstallPrompt.userChoice;deferredInstallPrompt=null;statusText.textContent=result.outcome==='accepted'?'Added to your Home Screen. Open the app there to enable reminders.':'You can add Campus Pause to your Home Screen whenever you are ready.';}catch(error){statusText.textContent=error.message||'Install prompt could not open. You can use your browser’s Add to Home Screen menu.';}finally{busy=false;installButton.disabled=false;state();}return;}
+ showInstallGuide();
+});
+document.getElementById('close-install-dialog').addEventListener('click',()=>installDialog.close());
+document.getElementById('done-install').addEventListener('click',()=>installDialog.close());
+enableButton.addEventListener('click',async()=>{
+ if(!config||busy)return;if(Notification.permission==='denied'){state();return;}busy=true;enableButton.disabled=true;let freshSub=null;
+ try{const permission=await Notification.requestPermission();if(permission!=='granted'){state();statusText.textContent='Notifications were not allowed. You can enable them later.';return;}
+  let token=localStorage.getItem('campus-pause-token');if(!token){token=base64(crypto.getRandomValues(new Uint8Array(32)));localStorage.setItem('campus-pause-token',token);}
+  registration=await prepareNotificationWorker();let sub=await registration.pushManager.getSubscription();if(!sub){sub=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:decode(config.publicKey)});freshSub=sub;}await saveDevice(sub,token);
+ }catch(error){if(freshSub)await freshSub.unsubscribe().catch(()=>{});state();statusText.textContent=error.message||'Registration failed. Please try again.';}
+ finally{busy=false;if(!device)enableButton.disabled=!config;}
+});
+function startCooldown(seconds){
+ testCooldown=Date.now()+seconds*1000;clearInterval(cooldownTimer);
+ const update=()=>{const left=Math.max(0,Math.ceil((testCooldown-Date.now())/1000));localTestButton.disabled=left>0;localTestButton.textContent=left?'Try automatic reminder again in '+left+'s':'2 · Test automatic reminder';if(!left)clearInterval(cooldownTimer);};
+ update();cooldownTimer=setInterval(update,1000);
+}
+async function watchTest(testId){
+ for(let attempt=0;attempt<10;attempt++){
+  await new Promise(resolve=>setTimeout(resolve,1500));
+  const {test}=await api('/api/test');
+  if(test?.id!==testId)continue;
+  if(test.display_state==='display_requested'){localTestStatus.textContent='Automatic delivery reached this device and requested a notification.';return;}
+  if(test.display_state==='display_failed'){localTestStatus.textContent='Automatic delivery reached this device, but the notification could not be displayed.';return;}
+ }
+ localTestStatus.textContent='Apple accepted the test, but this device did not confirm receipt. Automatic delivery is still not verified.';
+}
+testButton.addEventListener('click',async()=>{
+ testButton.disabled=true;statusText.textContent='Creating a notification on this phone…';
+ try{
+  // The instant test uses the active worker. Updating belongs to the separate
+  // automatic-delivery repair flow and would add avoidable network latency.
+  registration=registration||await navigator.serviceWorker.getRegistration()||await navigator.serviceWorker.ready;
+  const tag='campus-pause-device-test-'+Date.now();
+  await registration.showNotification('Campus Pause · Notification test',{body:'Notifications are working on this phone.',tag,renotify:true,silent:false,icon:'/icon.svg',data:{url:'/'}});
+  const active=await registration.getNotifications({tag});
+  statusText.textContent=active.length
+   ?'iOS created the notification. If no banner appeared, open Notification Center; Focus or the Campus Pause alert style is suppressing banners.'
+   :'iOS accepted the request but did not keep the notification. Open iPhone Settings → Notifications → Campus Pause and allow alerts, then test again.';
+ }catch(error){statusText.textContent=error.message||'This phone could not show the notification test.';}
+ finally{testButton.disabled=false;}
+});
+localTestButton.addEventListener('click',async()=>{
+ if(!config){localTestStatus.textContent='The reminder service is still connecting. Please try again in a moment.';return;}
+ if(localTestButton.disabled)return;let dailyBlocked=false;localTestButton.disabled=true;localTestStatus.textContent='Preparing automatic-delivery test…';
+ try{
+  registration=await prepareNotificationWorker();
+  const sub=await registration.pushManager.getSubscription();
+  if(!sub)throw Error('The saved push connection is missing. Open the explanation below and repair it.');
+  await saveDevice(sub,device.token);localTestStatus.textContent='Sending automatic-delivery test…';
+  const result=await api('/api/test','POST',{});startCooldown(result.retryAfter||60);
+  localTestStatus.textContent='Apple accepted the test. Waiting for this device to confirm receipt…';
+  try{await watchTest(result.testId);}catch{localTestStatus.textContent='The test was accepted, but its receipt could not be checked.';}
+ }catch(error){
+  if(!device){localStorage.removeItem('campus-pause-device');state();}
+  localTestStatus.textContent=error.message||'The automatic-delivery test could not be completed.';
+  if(error.dailyLimit){dailyBlocked=true;localTestButton.disabled=true;localTestButton.textContent='Daily test limit reached';if(error.retryAt)localTestStatus.textContent+=' Try again after '+new Date(error.retryAt).toLocaleString('en-US',{timeZone:'America/New_York',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})+'.';}
+  else if(error.retryAfter)startCooldown(error.retryAfter);
+ }finally{if(!dailyBlocked&&Date.now()>=testCooldown)localTestButton.disabled=false;}
+});
+async function scheduledResult(){
+ if(!device)return;
+ try{const {test}=await api('/api/test/scheduled');if(!test)return;
+  const due=new Date(test.due_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/New_York'});
+  scheduledStatus.textContent=test.display_state==='display_requested'?'The scheduled push reached this device and requested a notification. Confirm whether you saw it while the app was closed.':test.display_state==='display_failed'?'The scheduled push reached this device but could not display an alert.':test.display_state==='send_failed'||(test.dispatched_at&&test.provider_status!==null&&(test.provider_status<200||test.provider_status>=300))?'The scheduled push could not be sent. Please try again after checking the service.':test.dispatched_at?'The scheduled test was accepted by the push service, but this device has not confirmed it displayed. Check Notification Center.':'Test set for about '+due+'. Close the app now; reopen it after the notification to check the result.';
+ }catch{}
+}
+scheduledButton.addEventListener('click',async()=>{
+ scheduledButton.disabled=true;scheduledStatus.textContent='Scheduling a test for this device…';
+ try{registration=await prepareNotificationWorker();const sub=await registration.pushManager.getSubscription();if(!sub)throw Error('The saved push connection is missing. Repair it and try again.');
+  await saveDevice(sub,device.token);
+  const result=await api('/api/test/scheduled','POST',{});
+  const time=new Date(result.dueAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/New_York'});
+  scheduledStatus.textContent='Scheduled for about '+time+'. Close the Home Screen app now. Return after the alert to check its result.';
+ }catch(error){scheduledStatus.textContent=error.message||'The test could not be scheduled.';}
+ finally{scheduledButton.disabled=!config?.scheduler?.testReady;}
+});
+repairButton.addEventListener('click',async()=>{
+ repairButton.disabled=true;repairStatus.textContent='Renewing this device’s push connection…';
+ try{
+  registration=await prepareNotificationWorker();const oldSub=await registration.pushManager.getSubscription();
+  await oldSub?.unsubscribe().catch(()=>{});
+  const token=localStorage.getItem('campus-pause-token')||base64(crypto.getRandomValues(new Uint8Array(32)));localStorage.setItem('campus-pause-token',token);
+  const sub=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:decode(config.publicKey)});
+  await saveDevice(sub,token);repairStatus.textContent='Connection repaired. Now tap “Test automatic reminder.”';
+ }catch(error){await api('/api/device','DELETE',{}).catch(()=>{});device=null;localStorage.removeItem('campus-pause-device');state();repairStatus.textContent=error.message||'The connection could not be repaired. Enable notifications again.';}
+ finally{repairButton.disabled=false;}
+});
+stopButton.addEventListener('click',async()=>{stopButton.disabled=true;try{await api('/api/device','DELETE',{});registration=await navigator.serviceWorker.getRegistration();await (await registration?.pushManager.getSubscription())?.unsubscribe();localStorage.removeItem('campus-pause-device');device=null;state();statusText.textContent='Device removed. Reminders are off.';}catch(error){statusText.textContent=error.message;}finally{stopButton.disabled=false;}});
+document.getElementById('save').onclick=async()=>{const saved=document.getElementById('saved-state');try{localStorage.setItem('campus-pause-time',document.getElementById('reminder-time').value);if(device){registration=await navigator.serviceWorker.getRegistration();const sub=await registration?.pushManager.getSubscription();if(!sub)throw Error('Browser registration missing. Stop reminders and enable them again.');await saveDevice(sub,device.token);saved.textContent='Session and time saved to the reminder service.';}else saved.textContent='Preference saved on this device. Enable notifications to register.';}catch(error){saved.textContent=error.message;}};
+document.getElementById('session').addEventListener('change',()=>{if(device)document.getElementById('saved-state').textContent='To change your reminder session too, tap Save reminder preference.';});
+state();window.campusConfig.then(async data=>{config=data;if(device){try{const current=await api('/api/device');config.scheduler=current.scheduler;document.getElementById('reminder-time').value=String(current.hour);}catch(error){if(error.status===401){device=null;localStorage.removeItem('campus-pause-device');}else{statusText.textContent='Could not confirm reminder status. Please try again.';return;}}}state();scheduledResult();}).catch(()=>{statusText.textContent='Reminder service unavailable. Please refresh and try again.';});

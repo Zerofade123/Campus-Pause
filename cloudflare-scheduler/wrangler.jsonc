@@ -1,0 +1,8 @@
+{
+  "name": "campus-pause-scheduler",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-27",
+  "triggers": {
+    "crons": ["* * * * *", "0 * * * *"]
+  }
+}
