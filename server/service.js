@@ -53,6 +53,9 @@ export async function push(env,subscription,data){
   // Expired push subscriptions can return an HTML error body. Their HTTP
   // status still means that this device needs a fresh subscription.
   if(!r.redirected&&(r.status===404||r.status===410))return r.status;
+  // RFC 8030 section 5: 201 means accepted, regardless of response body type.
+  // Some providers label the acknowledgement as HTML. It is not rendered.
+  if(!r.redirected&&r.status===201)return r.status;
   // A redirected login page/HTML 200 is not a Web Push acceptance. Apple
   // documents 201 for success. Keep credentials at the original endpoint.
   if(r.redirected||(r.status>=300&&r.status<400)||responseType.includes('text/html')||(provider==='web.push.apple.com'&&r.status>=200&&r.status<300&&r.status!==201)){

@@ -47,13 +47,28 @@ test('New York time and DST are independent of UTC server time',()=>{assert.equa
 test('source parsing rejects errors and preserves no-class/open-office distinction',()=>{assert.throws(()=>parseCalendar('<h1>Error</h1>',sessions[0]));const html='<h1>Fall Regular 2026</h1><table class="tablepress">'+Array.from({length:5},()=>'<tr><td>October 12</td><td>Monday</td><td>No classes - offices open</td></tr>').join('')+'</table>';assert.equal(parseCalendar(html,sessions[0])[0].type,'no-class');});
 test('all five captured BMCC calendars parse when fixtures are present',()=>{for(const s of sessions){const f='fixtures/'+s.slug+'.html';if(fs.existsSync(f)){const events=parseCalendar(fs.readFileSync(f,'utf8'),s);assert.ok(events.length>=3);assert.ok(events.every(e=>e.end>=e.date));}}});
 test('only approved HTTPS push providers are accepted',async()=>{const s=await subscription();assert.equal(validSubscription(s),true);assert.equal(validSubscription({...s,endpoint:'https://localhost/internal'}),false);assert.equal(validSubscription({...s,endpoint:'https://fcm.googleapis.com.attacker.test/x'}),false);assert.equal(validSubscription({...s,endpoint:'http://fcm.googleapis.com/x'}),false);});
-test('push rejects redirects and HTML success responses; Apple acceptance requires 201',async()=>{const vapid=await credentials(),s=await subscription();s.endpoint='https://web.push.apple.com/test';const original=globalThis.fetch;try{
+test('push rejects redirects and HTML 200 responses; Apple acceptance requires 201',async()=>{const vapid=await credentials(),s=await subscription();s.endpoint='https://web.push.apple.com/test';const original=globalThis.fetch;try{
  for(const response of [new Response(null,{status:302,headers:{Location:'https://example.org/'}}),new Response('<html>login</html>',{status:200,headers:{'Content-Type':'text/html'}}),new Response(null,{status:200})]){
   globalThis.fetch=async()=>response;await assert.rejects(push(vapid,s,{title:'test'}));
  }
  globalThis.fetch=async(url,options)=>{assert.equal(options.redirect,'manual');assert.equal(options.headers['content-length'],undefined);return new Response(null,{status:201});};
  assert.equal(await push(vapid,s,{title:'test'}),201);
  }finally{globalThis.fetch=original;}});
+test('HTML-labelled 201 acceptance succeeds for immediate and scheduled desktop pushes',async()=>{
+ const env={...await credentials(),DB:database()},sub=await subscription(),token=randomBytes(32).toString('base64url');
+ const {id}=await (await worker.fetch(request('/api/device','POST',{subscription:sub,token,session:'regular',hour:19}),env,{})).json();
+ const auth={'X-Device-Id':id,Authorization:'Bearer '+token},original=globalThis.fetch;
+ globalThis.fetch=async()=>new Response('',{status:201,headers:{'Content-Type':'text/html; charset=UTF-8'}});
+ try{
+  const response=await worker.fetch(request('/api/test','POST',{},auth),env,{}),body=await response.json();
+  assert.equal(response.status,200);assert.equal(body.accepted,true);assert.equal(body.providerStatus,201);
+  const saved=env.DB.sqlite.prepare('SELECT * FROM push_tests').get();assert.equal(saved.display_state,null);assert.equal(saved.received_at,null);
+  env.DB.sqlite.prepare('INSERT INTO scheduled_tests(device,id,receipt_token,receipt_hash,due_at) VALUES(?,?,?,?,?)').run(id,'test','receipt','hash',new Date(Date.now()-1000).toISOString());
+  const dispatched=await dispatchScheduledTests(env);assert.equal(dispatched.accepted,1);assert.equal(dispatched.failed,0);
+  const result=await (await worker.fetch(request('/api/test/scheduled','GET',null,auth),env,{})).json();
+  assert.equal(result.test.provider_status,201);assert.equal(result.test.received_at,null);assert.equal(result.test.error,undefined);
+ }finally{globalThis.fetch=original;}
+});
 test('expired Chrome push endpoints are removed even when their error body is HTML',async()=>{
  const env={...await credentials(),DB:database()},sub=await subscription(),token=randomBytes(32).toString('base64url');
  const {id}=await (await worker.fetch(request('/api/device','POST',{subscription:sub,token,session:'regular',hour:19}),env,{})).json();
