@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+  <meta name="referrer" content="no-referrer">
+  <title>Push key setup · Campus Pause</title>
+  <style>
+    *{box-sizing:border-box}body{font:16px/1.55 system-ui,sans-serif;color:#183453;background:#edf3fb;margin:0;padding:24px}
+    main{max-width:650px;margin:36px auto;background:#fff;border:1px solid #d6e4f2;border-radius:16px;padding:clamp(22px,5vw,36px);box-shadow:0 12px 30px #123c6614}
+    h1{font-size:clamp(25px,5vw,34px);line-height:1.2;margin:8px 0 12px;color:#0058a4}p{margin:0 0 18px}small{color:#425c76}
+    button{border:0;background:#0058a4;color:white;font-weight:700;border-radius:8px;padding:12px 16px;min-height:44px;cursor:pointer}
+    button:hover{background:#00447e}button:focus-visible,input:focus-visible{outline:3px solid #ff6600;outline-offset:2px}
+    .row{display:flex;gap:8px;align-items:center;margin:8px 0 18px}.row input{min-width:0;flex:1;font:14px ui-monospace,monospace;padding:12px;border:1px solid #b9cadc;border-radius:8px}
+    .row button{flex:none}label{font-weight:700;display:block;margin-top:18px}#keys[hidden]{display:none}#status{min-height:24px;color:#284a74;margin-top:14px}
+    .note{background:#f1f6fc;border-radius:8px;padding:14px;margin-top:24px;font-size:14px}a{color:#0058a4}
+    @media(max-width:520px){.row{flex-wrap:wrap}.row input{flex-basis:100%}}
+  </style>
+</head>
+<body>
+<main>
+  <small>CAMPUS PAUSE · OWNER SETUP</small>
+  <h1>Generate push keys</h1>
+  <p>Tap once to create a matching key pair in this browser. This page does not send or store the keys.</p>
+  <button id="generate" type="button">Generate keys</button>
+  <p id="status" role="status" aria-live="polite"></p>
+  <section id="keys" hidden>
+    <label for="public-key">VAPID_PUBLIC_KEY · Cloudflare Text variable</label>
+    <div class="row"><input id="public-key" readonly autocomplete="off" spellcheck="false"><button type="button" data-copy="public-key">Copy</button></div>
+    <label for="private-key">VAPID_PRIVATE_KEY · Cloudflare Secret</label>
+    <div class="row"><input id="private-key" type="password" readonly autocomplete="off" spellcheck="false"><button type="button" data-copy="private-key">Copy</button><button id="show" type="button">Show</button></div>
+    <p class="note">In <strong>campus-pause → Settings → Variables and Secrets</strong>, add both values above. Also add <strong>VAPID_SUBJECT</strong> as Text: <code>mailto:</code> followed by an email address you check. Click <strong>Deploy</strong>. Keep the private key in a secure password manager; closing this page clears it. Do not share it in chat or GitHub.</p>
+  </section>
+  <p><a href="/">Back to Campus Pause</a></p>
+</main>
+<script>
+  const $=id=>document.getElementById(id);
+  $('generate').addEventListener('click',async()=>{
+    $('generate').disabled=true;$('status').textContent='Creating keys on this device…';$('keys').hidden=true;
+    try{
+      const pair=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']);
+      const jwk=await crypto.subtle.exportKey('jwk',pair.privateKey);
+      const decode=s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
+      const publicKey=btoa(String.fromCharCode(4,...decode(jwk.x),...decode(jwk.y))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+      if(publicKey.length!==87||jwk.d.length!==43)throw Error('Unexpected key format');
+      $('public-key').value=publicKey;$('private-key').value=jwk.d;
+      $('keys').hidden=false;$('status').textContent='Keys are ready. Copy both into the main Cloudflare Worker.';
+    }catch{$('status').textContent='Your browser could not generate keys. Try Chrome, Safari, or Firefox on a secure connection.';}
+    finally{$('generate').disabled=false;}
+  });
+  document.querySelectorAll('[data-copy]').forEach(button=>button.addEventListener('click',async()=>{
+    try{await navigator.clipboard.writeText($(button.dataset.copy).value);$('status').textContent=button.dataset.copy==='private-key'?'Private key copied. Paste it into the Cloudflare Secret.':'Public key copied. Paste it into the Cloudflare Text variable.';}
+    catch{$('status').textContent='Copy was blocked. Select the value in its box and copy it manually.';}
+  }));
+  $('show').addEventListener('click',()=>{const input=$('private-key');input.type=input.type==='password'?'text':'password';$('show').textContent=input.type==='password'?'Show':'Hide';});
+</script>
+</body>
+</html>
