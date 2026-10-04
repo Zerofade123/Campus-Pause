@@ -1,0 +1,17 @@
+{
+  "name": "campus-pause",
+  "main": "dist/server/index.js",
+  "compatibility_date": "2026-09-27",
+  "keep_vars": true,
+  "vars": {
+    "APP_ORIGIN": "https://campus-pause.kgaoussoudouga.workers.dev",
+    "SCHEDULER_ENABLED": "false"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "campus-pause-prod",
+      "database_id": "ef8159c7-62ae-4051-936e-3c9e70a1c96e"
+    }
+  ]
+}

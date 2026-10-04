@@ -13,6 +13,14 @@ Live BMCC calendar web app with D1-backed device registrations and Web Push deli
 
 ## Pending activation
 
+### Cloudflare app migration
+
+The `campus-pause` Worker must deploy from the repository root with `npm run build` and `npx wrangler deploy`. Root `wrangler.jsonc` points to the bundled API Worker and binds the owner's `campus-pause-prod` D1 database as `DB`. The old root deployment contained only static assets, so `/api/config` and `/api/calendar` returned 404. The separate `cloudflare-scheduler/` directory is the temporary Cron bridge to the currently live Sites app, not the web app.
+
+For a **new empty** Cloudflare D1 database, run `cloudflare-bootstrap.sql` once in the D1 SQL Console before testing the Cloudflare app. It is the four existing Drizzle migrations combined in order and validated against SQLite. Do not run it against the existing Sites database or rerun it after tables exist. The Cloudflare D1 database is separate from the Sites database; this schema setup does not migrate registrations or visitor counts. Do not point students or the custom domain at the Cloudflare Worker until `/api/config` and `/api/calendar?session=regular` both return 200 and a phone is registered and tested on the new origin.
+
+The Cloudflare Worker starts with `SCHEDULER_ENABLED=false` and no Cron Triggers. Its app origin points to the temporary `workers.dev` URL. Configure a matching VAPID public/private key pair and subject as Worker runtime values before offering push registration. The new origin needs its own device subscriptions; students who registered on the Sites origin must enable notifications again on the new origin. Never put a private key or job token in GitHub. Once the Cloudflare app, D1, and push are verified, schedule its built-in `scheduled()` handler and retire the separate bridge Worker before enabling automatic reminders, so there is only one scheduler.
+
 `SCHEDULER_ENABLED=false` until a real scheduler is installed and verified. The current Sites connector cannot attach Cron Triggers. Do not represent device registration as active automatic reminders before that gate is satisfied.
 
 The prepared Cloudflare Cron Worker is in `cloudflare-scheduler/`. Create a Worker in the owner's Cloudflare account with that code and `wrangler.jsonc`, set its `CAMPUS_PAUSE_ORIGIN` to this Site's HTTPS origin and `CAMPUS_PAUSE_JOB_TOKEN` to a secret matching the Site's `JOB_TOKEN`, then deploy. Never put the token in source, chat, or browser code. Cron runs `/api/jobs/tests` every minute and `/api/jobs/tick` hourly, following bounded batches. Check Cloudflare run logs and the Site's `jobs` heartbeat. The older Oracle runner remains available as a fallback for the hourly job, but cannot run the closed-app test without a separate minute job.
