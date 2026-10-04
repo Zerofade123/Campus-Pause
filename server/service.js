@@ -50,6 +50,9 @@ export async function push(env,subscription,data){
   const provider=new URL(subscription.endpoint).hostname;
   const responseType=r.headers.get('content-type')||'';
   console.info('push provider response',JSON.stringify({provider,status:r.status,redirected:r.redirected,responseType}));
+  // Expired push subscriptions can return an HTML error body. Their HTTP
+  // status still means that this device needs a fresh subscription.
+  if(!r.redirected&&(r.status===404||r.status===410))return r.status;
   // A redirected login page/HTML 200 is not a Web Push acceptance. Apple
   // documents 201 for success. Keep credentials at the original endpoint.
   if(r.redirected||(r.status>=300&&r.status<400)||responseType.includes('text/html')||(provider==='web.push.apple.com'&&r.status>=200&&r.status<300&&r.status!==201)){

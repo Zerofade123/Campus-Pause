@@ -6,6 +6,12 @@ const repairButton=document.getElementById('repair-connection'),repairStatus=doc
 let testCooldown=0,cooldownTimer=null;
 const isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
 const isAndroid=/Android/i.test(navigator.userAgent);
+const isWindows=/Windows/i.test(navigator.userAgent);
+const isMac=!isIOS&&/Mac/i.test(navigator.platform||navigator.userAgent);
+const notificationHelp=isIOS?'Check iPhone Settings → Notifications → Campus Pause, including Banners and Lock Screen, and turn off Focus or Sleep mode.':isWindows?'Check Windows Settings → System → Notifications, allow notifications for your browser or Campus Pause, and turn off Do not disturb or Focus assist.':isMac?'Check System Settings → Notifications for your browser or Campus Pause, and turn off Focus.':isAndroid?'Check Android notification settings for your browser or Campus Pause, and turn off Do Not Disturb.':'Check your browser and system notification settings, including Do Not Disturb.';
+document.getElementById('notification-device-help').textContent='No banner? '+notificationHelp;
+const closeTestHelp=(isIOS||isAndroid)?'Close the app, then reopen it after the alert.':'Close the Campus Pause tab or app, but leave the browser running for this first test.';
+document.getElementById('closed-test-help').textContent=closeTestHelp;
 let standalone=window.matchMedia('(display-mode: standalone)').matches||navigator.standalone;
 let deferredInstallPrompt=null;
 const installDialog=document.getElementById('install-dialog');
@@ -26,18 +32,18 @@ function state(){
  if(isIOS&&!standalone){enableButton.hidden=true;installButton.hidden=false;installButton.textContent='Add to Home Screen';installHint.hidden=false;installHint.textContent='iPhone users: this works in Safari or Chrome. Tap the button for the Share → Add to Home Screen steps.';statusText.textContent='Add it once, then open the Home Screen icon to enable reminders.';return;}
  if(!window.isSecureContext||!('Notification' in window)||!('serviceWorker' in navigator)||!('PushManager' in window)){enableButton.disabled=true;statusText.textContent='Push reminders are unavailable in this browser. You can still read the calendar.';return;}
  if(isAndroid&&!standalone){installHint.hidden=false;installHint.textContent=deferredInstallPrompt?'Android users: your browser can open the install prompt here. If it does not appear, use the browser menu and choose Install app or Add to Home Screen.':'Android users can enable notifications directly. Installing the app is optional; if your browser offers Install app or Add to Home Screen, you can use it from the browser menu.';}
- if(deferredInstallPrompt&&!standalone)installButton.hidden=false;
- enableButton.disabled=!config;enableButton.textContent=Notification.permission==='denied'?'How to unblock notifications':'Enable notifications';statusText.textContent=Notification.permission==='denied'?'Open your browser’s site permissions and allow notifications for this site, then return here.':!config?'Connecting to reminder service…':'Allow notifications to register this device. Scheduled delivery is still pending setup.';
+ if(deferredInstallPrompt&&!standalone){installButton.hidden=false;installButton.textContent=isAndroid?'Add to Home Screen':'Install Campus Pause';}
+ enableButton.disabled=!config;enableButton.textContent=Notification.permission==='denied'?'How to unblock notifications':'Enable notifications';statusText.textContent=Notification.permission==='denied'?'Open your browser’s site permissions and allow notifications for this site, then return here.':!config?'Connecting to reminder service…':config.scheduler?.healthy?'Allow notifications to receive reminders on this device.':'Allow notifications to register this device. Automatic delivery is being set up.';
 }
 const base64=bytes=>btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 const decode=s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
 async function saveDevice(sub,token){const result=await api('/api/device','POST',{subscription:sub.toJSON(),token,session:document.getElementById('session').value,hour:+document.getElementById('reminder-time').value});device={id:result.id,token};localStorage.setItem('campus-pause-device',JSON.stringify(device));config.scheduler=result.scheduler;state();}
 function showInstallGuide(){if(installDialog?.showModal)installDialog.showModal();else statusText.textContent='Open Safari’s Share menu, choose Add to Home Screen, then open the new icon.';}
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstallPrompt=event;state();});
-window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;standalone=true;state();statusText.textContent='Campus Pause was added. Open it from your Home Screen to enable reminders.';});
+window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;standalone=true;state();statusText.textContent='Campus Pause was installed. Open it to enable reminders.';});
 installButton.addEventListener('click',async()=>{
  if(busy)return;
- if(deferredInstallPrompt){busy=true;installButton.disabled=true;try{deferredInstallPrompt.prompt();const result=await deferredInstallPrompt.userChoice;deferredInstallPrompt=null;statusText.textContent=result.outcome==='accepted'?'Added to your Home Screen. Open the app there to enable reminders.':'You can add Campus Pause to your Home Screen whenever you are ready.';}catch(error){statusText.textContent=error.message||'Install prompt could not open. You can use your browser’s Add to Home Screen menu.';}finally{busy=false;installButton.disabled=false;state();}return;}
+ if(deferredInstallPrompt){busy=true;installButton.disabled=true;try{deferredInstallPrompt.prompt();const result=await deferredInstallPrompt.userChoice;deferredInstallPrompt=null;statusText.textContent=result.outcome==='accepted'?'App installed. Open Campus Pause to enable reminders.':'You can install Campus Pause whenever you are ready.';}catch(error){statusText.textContent=error.message||'Install prompt could not open. You can use your browser’s Add to Home Screen menu.';}finally{busy=false;installButton.disabled=false;state();}return;}
  showInstallGuide();
 });
 document.getElementById('close-install-dialog').addEventListener('click',()=>installDialog.close());
@@ -63,21 +69,21 @@ async function watchTest(testId){
   if(test.display_state==='display_requested'){localTestStatus.textContent='Automatic delivery reached this device and requested a notification.';return;}
   if(test.display_state==='display_failed'){localTestStatus.textContent='Automatic delivery reached this device, but the notification could not be displayed.';return;}
  }
- localTestStatus.textContent='Apple accepted the test, but this device did not confirm receipt. Automatic delivery is still not verified.';
+ localTestStatus.textContent='The push service accepted the test, but this device did not confirm receipt. Automatic delivery is still not verified.';
 }
 testButton.addEventListener('click',async()=>{
- testButton.disabled=true;statusText.textContent='Creating a notification on this phone…';
+ testButton.disabled=true;statusText.textContent='Creating a notification on this device…';
  try{
   // The instant test uses the active worker. Updating belongs to the separate
   // automatic-delivery repair flow and would add avoidable network latency.
   registration=registration||await navigator.serviceWorker.getRegistration()||await navigator.serviceWorker.ready;
   const tag='campus-pause-device-test-'+Date.now();
-  await registration.showNotification('Campus Pause · Notification test',{body:'Notifications are working on this phone.',tag,renotify:true,silent:false,icon:'/icon.svg',data:{url:'/'}});
+  await registration.showNotification('Campus Pause · Notification test',{body:'Notifications are working on this device.',tag,renotify:true,silent:false,icon:'/icon.svg',data:{url:'/'}});
   const active=await registration.getNotifications({tag});
   statusText.textContent=active.length
-   ?'iOS created the notification. If no banner appeared, open Notification Center; Focus or the Campus Pause alert style is suppressing banners.'
-   :'iOS accepted the request but did not keep the notification. Open iPhone Settings → Notifications → Campus Pause and allow alerts, then test again.';
- }catch(error){statusText.textContent=error.message||'This phone could not show the notification test.';}
+   ?'The browser created the notification. If no banner appeared, '+notificationHelp
+   :'The browser accepted the display request, but no active notification was found. '+notificationHelp;
+ }catch(error){statusText.textContent=error.message||'This device could not show the notification test.';}
  finally{testButton.disabled=false;}
 });
 localTestButton.addEventListener('click',async()=>{
@@ -89,9 +95,10 @@ localTestButton.addEventListener('click',async()=>{
   if(!sub)throw Error('The saved push connection is missing. Open the explanation below and repair it.');
   await saveDevice(sub,device.token);localTestStatus.textContent='Sending automatic-delivery test…';
   const result=await api('/api/test','POST',{});startCooldown(result.retryAfter||60);
-  localTestStatus.textContent='Apple accepted the test. Waiting for this device to confirm receipt…';
+  localTestStatus.textContent='The push service accepted the test. Waiting for this device to confirm receipt…';
   try{await watchTest(result.testId);}catch{localTestStatus.textContent='The test was accepted, but its receipt could not be checked.';}
  }catch(error){
+  if(error.status===410){await (await registration?.pushManager.getSubscription())?.unsubscribe().catch(()=>{});device=null;}
   if(!device){localStorage.removeItem('campus-pause-device');state();}
   localTestStatus.textContent=error.message||'The automatic-delivery test could not be completed.';
   if(error.dailyLimit){dailyBlocked=true;localTestButton.disabled=true;localTestButton.textContent='Daily test limit reached';if(error.retryAt)localTestStatus.textContent+=' Try again after '+new Date(error.retryAt).toLocaleString('en-US',{timeZone:'America/New_York',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})+'.';}
@@ -111,7 +118,7 @@ scheduledButton.addEventListener('click',async()=>{
   await saveDevice(sub,device.token);
   const result=await api('/api/test/scheduled','POST',{});
   const time=new Date(result.dueAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/New_York'});
-  scheduledStatus.textContent='Scheduled for about '+time+'. Close the Home Screen app now. Return after the alert to check its result.';
+  scheduledStatus.textContent='Scheduled for about '+time+'. '+closeTestHelp;
  }catch(error){scheduledStatus.textContent=error.message||'The test could not be scheduled.';}
  finally{scheduledButton.disabled=!config?.scheduler?.testReady;}
 });

@@ -33,7 +33,7 @@ test('provider rejection preserves a safe failure code for immediate and schedul
  globalThis.fetch=async()=>Response.json({reason:'BadJwtToken'},{status:403});
  try{
   const result=await worker.fetch(request('/api/test','POST',{},auth),env,{}),body=await result.json();
-  assert.equal(result.status,502);assert.match(body.error,/PUSH_AUTH/);assert.ok(!body.error.includes(env.VAPID_PRIVATE_KEY));
+  assert.equal(result.status,502);assert.match(body.error,/PUSH_AUTH \(HTTP 403\)/);assert.ok(!body.error.includes(env.VAPID_PRIVATE_KEY));
   assert.equal(env.DB.sqlite.prepare('SELECT provider_status FROM push_tests').get().provider_status,403);
   assert.equal(env.DB.sqlite.prepare('SELECT test_count FROM devices').get().test_count,0);
   env.DB.sqlite.prepare('INSERT INTO scheduled_tests(device,id,receipt_token,receipt_hash,due_at) VALUES(?,?,?,?,?)').run(id,'test','receipt','hash',new Date(Date.now()-1000).toISOString());
@@ -54,6 +54,13 @@ test('push rejects redirects and HTML success responses; Apple acceptance requir
  globalThis.fetch=async(url,options)=>{assert.equal(options.redirect,'manual');assert.equal(options.headers['content-length'],undefined);return new Response(null,{status:201});};
  assert.equal(await push(vapid,s,{title:'test'}),201);
  }finally{globalThis.fetch=original;}});
+test('expired Chrome push endpoints are removed even when their error body is HTML',async()=>{
+ const env={...await credentials(),DB:database()},sub=await subscription(),token=randomBytes(32).toString('base64url');
+ const {id}=await (await worker.fetch(request('/api/device','POST',{subscription:sub,token,session:'regular',hour:19}),env,{})).json();
+ const original=globalThis.fetch;globalThis.fetch=async()=>new Response('<html>Not Found</html>',{status:404,headers:{'Content-Type':'text/html'}});
+ try{const response=await worker.fetch(request('/api/test','POST',{}, {'X-Device-Id':id,Authorization:'Bearer '+token}),env,{});assert.equal(response.status,410);assert.match((await response.json()).error,/expired/);assert.equal(env.DB.sqlite.prepare('SELECT COUNT(*) n FROM devices').get().n,0);}
+ finally{globalThis.fetch=original;}
+});
 test('device registration, ownership, server test, rate limit and deletion',async()=>{const env={...await credentials(),DB:database()};const sub=await subscription(),token=Buffer.alloc(32,1).toString('base64url');let r=await worker.fetch(request('/api/device','POST',{subscription:sub,token,session:'regular',hour:19}),env,{});assert.equal(r.status,200);const {id}=await r.json();const auth={'X-Device-Id':id,Authorization:'Bearer '+token};assert.equal((await worker.fetch(request('/api/device','GET',null,auth),env,{})).status,200);assert.equal((await worker.fetch(request('/api/device','DELETE',{}, {...auth,Authorization:'Bearer wrong'}),env,{})).status,401);assert.equal((await worker.fetch(request('/api/device','POST',{subscription:sub,token:Buffer.alloc(32,2).toString('base64url'),session:'regular',hour:19}),env,{})).status,409);
  const original=globalThis.fetch;let sends=0;globalThis.fetch=async(url,options)=>{sends++;assert.equal(url,sub.endpoint);assert.ok(options.headers);assert.ok(options.body.byteLength>0);return new Response(null,{status:201});};try{assert.equal((await worker.fetch(request('/api/test','POST',{},auth),env,{})).status,200);assert.equal((await worker.fetch(request('/api/test','POST',{},auth),env,{})).status,429);assert.equal(sends,1);}finally{globalThis.fetch=original;}
  assert.equal((await worker.fetch(request('/api/device','DELETE',{},auth),env,{})).status,200);assert.equal((await worker.fetch(request('/api/device','GET',null,auth),env,{})).status,401);

@@ -13,7 +13,7 @@ const messages={
  PUSH_NETWORK:'The server could not reach the push service.',
  PUSH_UNKNOWN:'The notification could not be sent.'
 };
-export const failureMessage=code=>`${messages[code]||messages.PUSH_UNKNOWN} Reference: ${Object.hasOwn(messages,code)?code:'PUSH_UNKNOWN'}.`;
+export const failureMessage=(code,providerStatus=0)=>`${messages[code]||messages.PUSH_UNKNOWN} Reference: ${Object.hasOwn(messages,code)?code:'PUSH_UNKNOWN'}${Number.isInteger(providerStatus)&&providerStatus>=100&&providerStatus<=599?' (HTTP '+providerStatus+')':''}.`;
 export function pushError(code,httpStatus=503,providerStatus=0){return Object.assign(Error(failureMessage(code)),{pushCode:code,httpStatus,providerStatus});}
 export const failureCode=error=>Object.hasOwn(messages,error?.pushCode)?error.pushCode:'PUSH_UNKNOWN';
 const cache=new WeakMap();

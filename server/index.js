@@ -62,7 +62,7 @@ export async function handle(req,env,ctx){
  if(path==='/api/test/scheduled'&&req.method==='GET'){
   const device=await authenticate(req,env);
   const row=await first(env,'SELECT id,due_at,dispatched_at,provider_status,received_at,display_state,worker_version FROM scheduled_tests WHERE device=?',device.id);
-  if(row?.display_state?.startsWith('send_failed:'))row.error=failureMessage(row.display_state.slice('send_failed:'.length));
+  if(row?.display_state?.startsWith('send_failed:'))row.error=failureMessage(row.display_state.slice('send_failed:'.length),row.provider_status);
   return json({test:row||null,scheduler:await schedulerState(env)});
  }
  if(path==='/api/test/scheduled'&&req.method==='POST'){
@@ -81,7 +81,7 @@ export async function handle(req,env,ctx){
   const claim=await run(env,`UPDATE devices SET last_test=?,test_window_start=CASE WHEN test_window_start IS NULL OR test_window_start<=? THEN ? ELSE test_window_start END,test_count=CASE WHEN test_window_start IS NULL OR test_window_start<=? THEN 1 ELSE test_count+1 END WHERE id=? AND (last_test IS NULL OR last_test<?) AND (test_window_start IS NULL OR test_window_start<=? OR test_count<10)`,attemptAt,windowCutoff,attemptAt,windowCutoff,device.id,cooldownCutoff,windowCutoff);
   if(!claim.meta.changes){
    const latest=await first(env,'SELECT last_test,test_window_start,test_count FROM devices WHERE id=?',device.id),windowActive=latest?.test_window_start&&Date.parse(latest.test_window_start)>now-86400000;
-   if(windowActive&&latest.test_count>=10){const retryAt=Date.parse(latest.test_window_start)+86400000;return json({error:'Daily automatic-test limit reached. You can still use “Test this phone.”',dailyLimit:true,retryAfter:Math.max(1,Math.ceil((retryAt-now)/1000)),retryAt:new Date(retryAt).toISOString()},429);}
+   if(windowActive&&latest.test_count>=10){const retryAt=Date.parse(latest.test_window_start)+86400000;return json({error:'Daily automatic-test limit reached. You can still use “Test this device.”',dailyLimit:true,retryAfter:Math.max(1,Math.ceil((retryAt-now)/1000)),retryAt:new Date(retryAt).toISOString()},429);}
    return json({error:'Please wait before another automatic test.',retryAfter:Math.max(1,Math.ceil((Date.parse(latest?.last_test||attemptAt)+60000-now)/1000))},429);
   }
   const testId=crypto.randomUUID(),receiptToken=Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join('');
@@ -89,7 +89,7 @@ export async function handle(req,env,ctx){
    await run(env,'INSERT INTO push_tests(device,id,receipt_hash,created_at) VALUES(?,?,?,?) ON CONFLICT(device) DO UPDATE SET id=excluded.id,receipt_hash=excluded.receipt_hash,created_at=excluded.created_at,provider_status=NULL,received_at=NULL,display_state=NULL,worker_version=NULL',device.id,testId,await digest(receiptToken),attemptAt);
    status=await push(env,JSON.parse(device.subscription),{title:'Campus Pause · Delivery test',body:'This notification arrived from Campus Pause. Your connection test is complete.',tag:'campus-pause-test-'+testId,testId,receiptToken,url:'/'});
    await run(env,'UPDATE push_tests SET provider_status=? WHERE device=? AND id=?',status,device.id,testId);
-  }catch(error){const code=failureCode(error);console.error('delivery test failed',code);await run(env,'UPDATE push_tests SET provider_status=?,display_state=? WHERE device=? AND id=?',error.providerStatus||0,'send_failed:'+code,device.id,testId);await releaseTestClaim(env,device.id,attemptAt);fail(failureMessage(code),error.httpStatus||503);}
+  }catch(error){const code=failureCode(error);console.error('delivery test failed',code);await run(env,'UPDATE push_tests SET provider_status=?,display_state=? WHERE device=? AND id=?',error.providerStatus||0,'send_failed:'+code,device.id,testId);await releaseTestClaim(env,device.id,attemptAt);fail(failureMessage(code,error.providerStatus),error.httpStatus||503);}
   if(status===404||status===410){await deleteDevice(env,device.id);fail('This browser registration expired. Enable reminders again.',410);}
   if(status<200||status>=300){await releaseTestClaim(env,device.id,attemptAt);fail('The push service did not accept this test. Please try again.',502);}
   return json({accepted:true,testId,providerStatus:status,retryAfter:60});
