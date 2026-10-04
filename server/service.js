@@ -56,7 +56,7 @@ export async function push(env,subscription,data){
   return r.status;
  }catch(error){console.error('push request failed',error?.name||'Error');throw error;}
 }
-export async function schedulerState(env){const job=await first(env,'SELECT * FROM jobs WHERE id=?','tick');const testJob=await first(env,'SELECT last_success FROM jobs WHERE id=?','test-dispatch');return {configured:env.SCHEDULER_ENABLED==='true',healthy:env.SCHEDULER_ENABLED==='true'&&!!job?.last_success&&Date.now()-Date.parse(job.last_success)<90*60000,lastRun:job?.last_success||null,testReady:!!testJob?.last_success&&Date.now()-Date.parse(testJob.last_success)<3*60000};}
+export async function schedulerState(env){const job=await first(env,'SELECT * FROM jobs WHERE id=?','tick');const testJob=await first(env,'SELECT last_success FROM jobs WHERE id=?','test-dispatch');const pushReady=!!(env.VAPID_PUBLIC_KEY&&env.VAPID_PRIVATE_KEY&&env.VAPID_SUBJECT);return {configured:env.SCHEDULER_ENABLED==='true'&&pushReady,healthy:env.SCHEDULER_ENABLED==='true'&&pushReady&&!!job?.last_success&&Date.now()-Date.parse(job.last_success)<90*60000,lastRun:job?.last_success||null,testReady:pushReady&&!!testJob?.last_success&&Date.now()-Date.parse(testJob.last_success)<3*60000};}
 export async function dispatchScheduledTests(env){
  const now=new Date().toISOString();let accepted=0,failed=0;
  const tests=await all(env,'SELECT * FROM scheduled_tests WHERE due_at <= ? AND dispatched_at IS NULL ORDER BY due_at LIMIT 20',now);

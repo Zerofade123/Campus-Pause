@@ -21,7 +21,7 @@ export async function handle(req,env,ctx){
   if(req.headers.get('Origin')!==url.origin)fail('Request origin not allowed',403);
   if(!req.headers.get('Content-Type')?.includes('application/json'))fail('JSON required',415);
  }
- if(path==='/api/config'&&req.method==='GET')return json({sessions:sessions.map(({id,label})=>({id,label})),publicKey:env.VAPID_PUBLIC_KEY||null,scheduler:await schedulerState(env)});
+ if(path==='/api/config'&&req.method==='GET')return json({sessions:sessions.map(({id,label})=>({id,label})),publicKey:env.VAPID_PUBLIC_KEY&&env.VAPID_PRIVATE_KEY&&env.VAPID_SUBJECT?env.VAPID_PUBLIC_KEY:null,scheduler:await schedulerState(env)});
  if(path==='/api/visit'&&req.method==='POST'){
   const b=await body(req);if(typeof b.visitor!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(b.visitor))fail('Invalid visitor');
   const now=new Date().toISOString(),day=now.slice(0,10);
@@ -97,4 +97,19 @@ export async function handle(req,env,ctx){
  const asset=assets[path==='/'?'/index.html':path];if(!asset)fail('Not found',404);
  return new Response(req.method==='HEAD'?null:asset.content,{headers:{'Content-Type':asset.type,'Cache-Control':'no-cache','X-Content-Type-Options':'nosniff','Referrer-Policy':'strict-origin-when-cross-origin',...(path==='/sw.js'?{'Service-Worker-Allowed':'/'}:{})}});
 }
-export default {async fetch(req,env,ctx){try{return await handle(req,env,ctx);}catch(error){console.error('request failed',new URL(req.url).pathname,error.status||500);return json({error:error.status?error.message:'Service temporarily unavailable. Please try again.'},error.status||503);}},async scheduled(controller,env,ctx){ctx.waitUntil((async()=>{await dispatchScheduledTests(env);if(new Date().getUTCMinutes()===0){const result=await tick(env);if(result.nextCursor)console.error('Delivery batch capacity reached; configure the external runner for continuation.');}})());}};
+export async function handleSchedule(cron,env){
+ if(cron==='* * * * *')return dispatchScheduledTests(env);
+ if(cron==='0 * * * *'){
+  let cursor='';
+  for(let page=0;page<100;page++){
+   const result=await tick(env,{cursor,force:!cursor});
+   if(result.busy)throw Error('Hourly calendar check is already running');
+   if(result.calendarsChecked!==sessions.length||result.failed)throw Error('Calendar check or reminder delivery failed');
+   cursor=result.nextCursor;
+   if(!cursor)return result;
+  }
+  throw Error('Reminder batch exceeded 100 pages');
+ }
+ throw Error('Unknown Cron trigger: '+cron);
+}
+export default {async fetch(req,env,ctx){try{return await handle(req,env,ctx);}catch(error){console.error('request failed',new URL(req.url).pathname,error.status||500);return json({error:error.status?error.message:'Service temporarily unavailable. Please try again.'},error.status||503);}},async scheduled(controller,env,ctx){ctx.waitUntil(handleSchedule(controller.cron,env));}};

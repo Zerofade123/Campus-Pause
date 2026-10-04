@@ -3,6 +3,9 @@
   "main": "dist/server/index.js",
   "compatibility_date": "2026-09-27",
   "keep_vars": true,
+  "triggers": {
+    "crons": ["* * * * *", "0 * * * *"]
+  },
   "vars": {
     "APP_ORIGIN": "https://campus-pause.kgaoussoudouga.workers.dev",
     "SCHEDULER_ENABLED": "false"
