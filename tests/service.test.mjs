@@ -4,7 +4,8 @@ import {DatabaseSync} from 'node:sqlite';
 import fs from 'node:fs';
 import {createECDH,randomBytes,hkdfSync,createDecipheriv} from 'node:crypto';
 import {sessions,parseCalendar,dateRange,localDate,localParts,dayEvents,digest} from '../server/calendar.js';
-import {tick,refreshCalendar,validSubscription,push} from '../server/service.js';
+import {tick,refreshCalendar,validSubscription,push,dispatchScheduledTests} from '../server/service.js';
+import {readPushConfiguration} from '../server/push-config.js';
 import worker from '../server/index.js';
 function database(){
  const sqlite=new DatabaseSync(':memory:');
@@ -15,6 +16,32 @@ function database(){
 async function credentials(){const pair=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']);const j=await crypto.subtle.exportKey('jwk',pair.privateKey);const raw=await crypto.subtle.exportKey('raw',pair.publicKey);return{VAPID_PUBLIC_KEY:Buffer.from(raw).toString('base64url'),VAPID_PRIVATE_KEY:j.d,VAPID_SUBJECT:'https://example.org',JOB_TOKEN:'test-only-token',SCHEDULER_ENABLED:'false'};}
 async function subscription(){const pair=await crypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'},true,['deriveBits']);return{endpoint:'https://fcm.googleapis.com/fcm/send/test',keys:{p256dh:Buffer.from(await crypto.subtle.exportKey('raw',pair.publicKey)).toString('base64url'),auth:Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('base64url')}};}
 const request=(path,method='GET',body,extra={})=>new Request('https://example.org'+path,{method,headers:{Origin:'https://example.org','Content-Type':'application/json',...extra},...(body?{body:JSON.stringify(body)}:{})});
+test('push setup validates matching keys and contact without exposing saved values',async()=>{
+ const env={...await credentials(),DB:database()},other=await credentials();
+ assert.equal((await readPushConfiguration({...env,VAPID_SUBJECT:' mailto:owner@example.org '})).subject,'mailto:owner@example.org');
+ for(const [change,code] of [[{VAPID_SUBJECT:'owner@example.org'},'VAPID_SUBJECT'],[{VAPID_PRIVATE_KEY:'VAPID_PRIVATE_KEY: wrong'},'VAPID_PRIVATE_KEY'],[{VAPID_PRIVATE_KEY:other.VAPID_PRIVATE_KEY},'VAPID_KEY_PAIR']]){
+  const config=await (await worker.fetch(request('/api/config'),{...env,...change},{})).json();
+  assert.deepEqual(config.pushConfiguration,{ready:false,code});assert.equal(config.publicKey,null);
+  assert.ok(!JSON.stringify(config).includes(env.VAPID_PRIVATE_KEY));
+  await assert.rejects(readPushConfiguration({...env,...change}),error=>error.pushCode===code);
+ }
+});
+test('provider rejection preserves a safe failure code for immediate and scheduled tests',async()=>{
+ const env={...await credentials(),DB:database()},sub=await subscription(),token=randomBytes(32).toString('base64url');
+ const {id}=await (await worker.fetch(request('/api/device','POST',{subscription:sub,token,session:'regular',hour:19}),env,{})).json();
+ const auth={'X-Device-Id':id,Authorization:'Bearer '+token},original=globalThis.fetch;
+ globalThis.fetch=async()=>Response.json({reason:'BadJwtToken'},{status:403});
+ try{
+  const result=await worker.fetch(request('/api/test','POST',{},auth),env,{}),body=await result.json();
+  assert.equal(result.status,502);assert.match(body.error,/PUSH_AUTH/);assert.ok(!body.error.includes(env.VAPID_PRIVATE_KEY));
+  assert.equal(env.DB.sqlite.prepare('SELECT provider_status FROM push_tests').get().provider_status,403);
+  assert.equal(env.DB.sqlite.prepare('SELECT test_count FROM devices').get().test_count,0);
+  env.DB.sqlite.prepare('INSERT INTO scheduled_tests(device,id,receipt_token,receipt_hash,due_at) VALUES(?,?,?,?,?)').run(id,'test','receipt','hash',new Date(Date.now()-1000).toISOString());
+  assert.equal((await dispatchScheduledTests(env)).failed,1);
+  const scheduled=await (await worker.fetch(request('/api/test/scheduled','GET',null,auth),env,{})).json();
+  assert.equal(scheduled.test.provider_status,403);assert.match(scheduled.test.error,/PUSH_AUTH/);assert.ok(!('receipt_token' in scheduled.test));
+ }finally{globalThis.fetch=original;}
+});
 test('date ranges, cross-year rollover, and invalid format rejection',()=>{assert.deepEqual(dateRange('December 31',sessions[3]),{date:'2026-12-31',end:'2026-12-31'});assert.equal(dateRange('January 1',sessions[0]).date,'2027-01-01');assert.equal(dateRange('September 11 –13',sessions[0]).end,'2026-09-13');assert.throws(()=>dateRange('February 30',sessions[4]));assert.throws(()=>dateRange('TBD',sessions[0]));});
 test('New York time and DST are independent of UTC server time',()=>{assert.equal(localDate(new Date('2026-09-27T01:00Z')),'2026-09-26');assert.equal(localParts(new Date('2026-10-12T23:00Z')).hour,'19');assert.equal(localParts(new Date('2026-11-26T00:00Z')).hour,'19');});
 test('source parsing rejects errors and preserves no-class/open-office distinction',()=>{assert.throws(()=>parseCalendar('<h1>Error</h1>',sessions[0]));const html='<h1>Fall Regular 2026</h1><table class="tablepress">'+Array.from({length:5},()=>'<tr><td>October 12</td><td>Monday</td><td>No classes - offices open</td></tr>').join('')+'</table>';assert.equal(parseCalendar(html,sessions[0])[0].type,'no-class');});

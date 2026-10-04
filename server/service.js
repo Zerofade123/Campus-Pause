@@ -1,6 +1,7 @@
 import { buildPushPayload } from '@block65/webcrypto-web-push';
 import {sessions,sourceFor,parseCalendar,localDate,localParts,addDays,dayEvents,digest,notificationFor} from './calendar.js';
 import {first,run,all,db} from './storage.js';
+import {readPushConfiguration,pushConfigurationStatus,pushError,failureCode} from './push-config.js';
 const HOUR=3600000;
 export async function refreshCalendar(env,s,force=false){
  const now=new Date().toISOString();let old=await first(env,'SELECT * FROM calendars WHERE id=?',s.id);
@@ -26,6 +27,7 @@ export function validSubscription(sub){
  }catch{return false;}
 }
 export async function push(env,subscription,data){
+ const vapid=await readPushConfiguration(env);
  let payload;
  const origin=env.APP_ORIGIN||'https://campus-pause-bmcc.gaoussou-keita441104.chatgpt.site';
  let navigate=new URL(data.url||'/',origin);
@@ -37,8 +39,8 @@ export async function push(env,subscription,data){
   notification:{title:data.title||'Campus Pause',body:data.body||'',navigate:navigate.href,tag:data.tag||'campus-pause',silent:false},
   ...(data.testId&&data.receiptToken?{testId:data.testId,receiptToken:data.receiptToken}:{})
  };
- try{payload=await buildPushPayload({data:JSON.stringify(message),options:{ttl:data.testId?60:3600,urgency:data.testId?'high':'normal'}},subscription,{subject:env.VAPID_SUBJECT,publicKey:env.VAPID_PUBLIC_KEY,privateKey:env.VAPID_PRIVATE_KEY});}
- catch(error){console.error('push payload build failed',error?.name||'Error');throw error;}
+ try{payload=await buildPushPayload({data:JSON.stringify(message),options:{ttl:data.testId?60:3600,urgency:data.testId?'high':'normal'}},subscription,vapid);}
+ catch(error){console.error('push payload build failed',error?.name||'Error');throw pushError('PUSH_PAYLOAD');}
  // Cloudflare computes Content-Length from the typed-array body. The push
  // library includes it for generic fetch clients, but manually supplying it
  // can be ignored or rejected by edge runtimes.
@@ -51,12 +53,21 @@ export async function push(env,subscription,data){
   // A redirected login page/HTML 200 is not a Web Push acceptance. Apple
   // documents 201 for success. Keep credentials at the original endpoint.
   if(r.redirected||(r.status>=300&&r.status<400)||responseType.includes('text/html')||(provider==='web.push.apple.com'&&r.status>=200&&r.status<300&&r.status!==201)){
-   throw Error('Unexpected push provider response');
+   throw pushError('PUSH_RESPONSE',502,r.status);
+  }
+  if(!r.ok&&r.status!==404&&r.status!==410){
+   // Only log known provider reason identifiers, never response bodies,
+   // subscription URLs, signed headers, or secrets.
+   const known=new Set(['BadJwtToken','BadVapidPublicKey','VapidPkHashMismatch','BadAuthorizationHeader','BadTtl','BadUrgency','BadEncoding','BadPayload','PayloadTooLarge','TooManyRequests','InternalServerError','ServiceUnavailable']);
+   let reason='Unspecified';try{const body=await r.json();if(known.has(body.reason))reason=body.reason;}catch{}
+   console.error('push provider rejected',JSON.stringify({provider,status:r.status,reason}));
+   const code=[401,403].includes(r.status)?'PUSH_AUTH':r.status===429?'PUSH_RATE_LIMIT':r.status>=500?'PUSH_PROVIDER':'PUSH_REQUEST';
+   throw pushError(code,502,r.status);
   }
   return r.status;
- }catch(error){console.error('push request failed',error?.name||'Error');throw error;}
+ }catch(error){console.error('push request failed',error.pushCode||'PUSH_NETWORK');if(error.pushCode)throw error;throw pushError('PUSH_NETWORK');}
 }
-export async function schedulerState(env){const job=await first(env,'SELECT * FROM jobs WHERE id=?','tick');const testJob=await first(env,'SELECT last_success FROM jobs WHERE id=?','test-dispatch');const pushReady=!!(env.VAPID_PUBLIC_KEY&&env.VAPID_PRIVATE_KEY&&env.VAPID_SUBJECT);return {configured:env.SCHEDULER_ENABLED==='true'&&pushReady,healthy:env.SCHEDULER_ENABLED==='true'&&pushReady&&!!job?.last_success&&Date.now()-Date.parse(job.last_success)<90*60000,lastRun:job?.last_success||null,testReady:pushReady&&!!testJob?.last_success&&Date.now()-Date.parse(testJob.last_success)<3*60000};}
+export async function schedulerState(env){const job=await first(env,'SELECT * FROM jobs WHERE id=?','tick');const testJob=await first(env,'SELECT last_success FROM jobs WHERE id=?','test-dispatch');const pushReady=(await pushConfigurationStatus(env)).ready;return {configured:env.SCHEDULER_ENABLED==='true'&&pushReady,healthy:env.SCHEDULER_ENABLED==='true'&&pushReady&&!!job?.last_success&&Date.now()-Date.parse(job.last_success)<90*60000,lastRun:job?.last_success||null,testReady:pushReady&&!!testJob?.last_success&&Date.now()-Date.parse(testJob.last_success)<3*60000};}
 export async function dispatchScheduledTests(env){
  const now=new Date().toISOString();let accepted=0,failed=0;
  const tests=await all(env,'SELECT * FROM scheduled_tests WHERE due_at <= ? AND dispatched_at IS NULL ORDER BY due_at LIMIT 20',now);
@@ -71,7 +82,7 @@ export async function dispatchScheduledTests(env){
    if(status===404||status===410){await deleteDevice(env,test.device);failed++;}
    else if(status>=200&&status<300)accepted++;
    else failed++;
-  }catch(error){console.error('scheduled push failed',error?.name||'Error');await run(env,"UPDATE scheduled_tests SET provider_status=0,display_state='send_failed' WHERE device=? AND id=?",test.device,test.id);failed++;}
+  }catch(error){const code=failureCode(error);console.error('scheduled push failed',code);await run(env,'UPDATE scheduled_tests SET provider_status=?,display_state=? WHERE device=? AND id=?',error.providerStatus||0,'send_failed:'+code,test.device,test.id);failed++;}
  }
  await run(env,"INSERT INTO jobs(id,last_started,last_success,error) VALUES('test-dispatch',?,?,NULL) ON CONFLICT(id) DO UPDATE SET last_started=excluded.last_started,last_success=excluded.last_success,error=NULL",now,new Date().toISOString());
  return {processed:tests.length,accepted,failed};

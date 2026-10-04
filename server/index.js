@@ -2,6 +2,7 @@ import assets from './assets.generated.js';
 import {sessions,sourceFor,localDate,digest} from './calendar.js';
 import {first,run,all} from './storage.js';
 import {refreshCalendar,validSubscription,push,schedulerState,tick,dispatchScheduledTests,deleteDevice} from './service.js';
+import {pushConfigurationStatus,failureCode,failureMessage} from './push-config.js';
 const json=(value,status=200)=>Response.json(value,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 const fail=(message,status=400)=>{throw Object.assign(Error(message),{status});};
 async function body(req){if(+(req.headers.get('Content-Length')||0)>8192)fail('Request too large',413);const text=await req.text();if(text.length>8192)fail('Request too large',413);try{return JSON.parse(text);}catch{fail('Invalid JSON');}}
@@ -21,7 +22,7 @@ export async function handle(req,env,ctx){
   if(req.headers.get('Origin')!==url.origin)fail('Request origin not allowed',403);
   if(!req.headers.get('Content-Type')?.includes('application/json'))fail('JSON required',415);
  }
- if(path==='/api/config'&&req.method==='GET')return json({sessions:sessions.map(({id,label})=>({id,label})),publicKey:env.VAPID_PUBLIC_KEY&&env.VAPID_PRIVATE_KEY&&env.VAPID_SUBJECT?env.VAPID_PUBLIC_KEY:null,scheduler:await schedulerState(env)});
+ if(path==='/api/config'&&req.method==='GET'){const pushConfiguration=await pushConfigurationStatus(env);return json({sessions:sessions.map(({id,label})=>({id,label})),publicKey:pushConfiguration.ready?env.VAPID_PUBLIC_KEY.trim():null,pushConfiguration,scheduler:await schedulerState(env)});}
  if(path==='/api/visit'&&req.method==='POST'){
   const b=await body(req);if(typeof b.visitor!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(b.visitor))fail('Invalid visitor');
   const now=new Date().toISOString(),day=now.slice(0,10);
@@ -61,6 +62,7 @@ export async function handle(req,env,ctx){
  if(path==='/api/test/scheduled'&&req.method==='GET'){
   const device=await authenticate(req,env);
   const row=await first(env,'SELECT id,due_at,dispatched_at,provider_status,received_at,display_state,worker_version FROM scheduled_tests WHERE device=?',device.id);
+  if(row?.display_state?.startsWith('send_failed:'))row.error=failureMessage(row.display_state.slice('send_failed:'.length));
   return json({test:row||null,scheduler:await schedulerState(env)});
  }
  if(path==='/api/test/scheduled'&&req.method==='POST'){
@@ -87,7 +89,7 @@ export async function handle(req,env,ctx){
    await run(env,'INSERT INTO push_tests(device,id,receipt_hash,created_at) VALUES(?,?,?,?) ON CONFLICT(device) DO UPDATE SET id=excluded.id,receipt_hash=excluded.receipt_hash,created_at=excluded.created_at,provider_status=NULL,received_at=NULL,display_state=NULL,worker_version=NULL',device.id,testId,await digest(receiptToken),attemptAt);
    status=await push(env,JSON.parse(device.subscription),{title:'Campus Pause · Delivery test',body:'This notification arrived from Campus Pause. Your connection test is complete.',tag:'campus-pause-test-'+testId,testId,receiptToken,url:'/'});
    await run(env,'UPDATE push_tests SET provider_status=? WHERE device=? AND id=?',status,device.id,testId);
-  }catch(error){await releaseTestClaim(env,device.id,attemptAt);fail('The delivery test could not be sent. Please try again shortly.',503);}
+  }catch(error){const code=failureCode(error);console.error('delivery test failed',code);await run(env,'UPDATE push_tests SET provider_status=?,display_state=? WHERE device=? AND id=?',error.providerStatus||0,'send_failed:'+code,device.id,testId);await releaseTestClaim(env,device.id,attemptAt);fail(failureMessage(code),error.httpStatus||503);}
   if(status===404||status===410){await deleteDevice(env,device.id);fail('This browser registration expired. Enable reminders again.',410);}
   if(status<200||status>=300){await releaseTestClaim(env,device.id,attemptAt);fail('The push service did not accept this test. Please try again.',502);}
   return json({accepted:true,testId,providerStatus:status,retryAfter:60});
