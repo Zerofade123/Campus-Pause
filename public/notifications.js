@@ -21,6 +21,7 @@ try{device=JSON.parse(localStorage.getItem('campus-pause-device')||'null');testC
 function headers(){return {'Content-Type':'application/json',...(device?{'X-Device-Id':device.id,'Authorization':'Bearer '+device.token}:{})};}
 async function api(path,method='GET',body){const response=await fetch(path,{method,headers:headers(),...(body?{body:JSON.stringify(body)}:{})});const data=await response.json();if(!response.ok)throw Object.assign(Error(data.error),{status:response.status,retryAfter:data.retryAfter,dailyLimit:data.dailyLimit,retryAt:data.retryAt});return data;}
 function state(){
+ document.getElementById('notification-tests').hidden=!device;
  document.getElementById('scheduler-note').hidden=!!config?.scheduler?.healthy;
  testButton.hidden=!device;stopButton.hidden=!device;enableButton.hidden=!!device;installButton.hidden=true;installHint.hidden=true;enableButton.disabled=false;
  localTestButton.hidden=!device||!(window.isSecureContext&&'serviceWorker' in navigator&&'Notification' in window&&Notification.permission==='granted'&&(!isIOS||standalone));
@@ -58,7 +59,7 @@ enableButton.addEventListener('click',async()=>{
 });
 function startCooldown(seconds){
  testCooldown=Date.now()+seconds*1000;try{localStorage.setItem('campus-pause-test-retry-at',String(testCooldown));}catch{}clearInterval(cooldownTimer);
- const update=()=>{const left=Math.max(0,Math.ceil((testCooldown-Date.now())/1000));localTestButton.disabled=left>0;scheduledButton.disabled=left>0||!config?.scheduler?.testReady;const wait=left>=3600?Math.ceil(left/3600)+'h':Math.floor(left/60)+'m '+left%60+'s';localTestButton.textContent=left?'Another server test in '+wait:'Send test notification';scheduledButton.textContent=left?'Another server test in '+wait:'Test after closing the app';if(!left)clearInterval(cooldownTimer);};
+ const update=()=>{const left=Math.max(0,Math.ceil((testCooldown-Date.now())/1000));localTestButton.disabled=left>0;scheduledButton.disabled=left>0||!config?.scheduler?.testReady;const wait=left>=3600?Math.ceil(left/3600)+'h':Math.floor(left/60)+'m '+left%60+'s';localTestButton.textContent='Send test notification';scheduledButton.textContent='Test after closing the app';document.getElementById('test-cooldown').textContent=left?'Server tests available again in '+wait+'.':'';if(!left)clearInterval(cooldownTimer);};
  update();cooldownTimer=setInterval(update,1000);
 }
 async function watchTest(testId){
@@ -99,7 +100,7 @@ localTestButton.addEventListener('click',async()=>{
   if(error.status===410){await (await registration?.pushManager.getSubscription())?.unsubscribe().catch(()=>{});device=null;}
   if(!device){localStorage.removeItem('campus-pause-device');state();}
   localTestStatus.textContent=error.message||'The automatic-delivery test could not be completed.';
-  if(error.dailyLimit){dailyBlocked=true;localTestButton.disabled=true;localTestButton.textContent='Daily test limit reached';if(error.retryAt)localTestStatus.textContent+=' Try again after '+new Date(error.retryAt).toLocaleString('en-US',{timeZone:'America/New_York',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})+'.';}
+  if(error.dailyLimit){dailyBlocked=true;localTestButton.disabled=true;document.getElementById('test-cooldown').textContent='Daily server-test limit reached.';if(error.retryAt)localTestStatus.textContent+=' Try again after '+new Date(error.retryAt).toLocaleString('en-US',{timeZone:'America/New_York',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})+'.';}
   if(error.retryAfter)startCooldown(error.retryAfter);
  }finally{if(!dailyBlocked&&Date.now()>=testCooldown)localTestButton.disabled=false;}
 });
