@@ -94,8 +94,9 @@ test('closed-app test waits for the scheduler, sends once, and records a receipt
  assert.equal((await worker.fetch(request('/api/test/scheduled','POST',{},auth),env,{})).status,503);
  assert.equal((await worker.fetch(request('/api/jobs/tests','POST',{}),env,{})).status,401);
  const job=await worker.fetch(request('/api/jobs/tests','POST',null,{Authorization:'Bearer '+env.JOB_TOKEN}),env,{});assert.equal(job.status,200);
+ const before=Date.now();
  const scheduled=await worker.fetch(request('/api/test/scheduled','POST',{},auth),env,{});assert.equal(scheduled.status,200);
- const {id:testId,dueAt}=await scheduled.json();assert.ok(Date.parse(dueAt)>Date.now());
+ const {id:testId,dueAt}=await scheduled.json();assert.ok(Date.parse(dueAt)>=before+60000);assert.ok(Date.parse(dueAt)<=Date.now()+60000);
  const original=globalThis.fetch;let sends=0;globalThis.fetch=async()=>{sends++;return new Response(null,{status:201});};
  try{
   assert.equal((await (await worker.fetch(request('/api/jobs/tests','POST',null,{Authorization:'Bearer '+env.JOB_TOKEN}),env,{})).json()).processed,0);

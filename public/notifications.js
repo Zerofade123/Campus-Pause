@@ -58,7 +58,7 @@ enableButton.addEventListener('click',async()=>{
 });
 function startCooldown(seconds){
  testCooldown=Date.now()+seconds*1000;clearInterval(cooldownTimer);
- const update=()=>{const left=Math.max(0,Math.ceil((testCooldown-Date.now())/1000));localTestButton.disabled=left>0;localTestButton.textContent=left?'Try automatic reminder again in '+left+'s':'2 · Test automatic reminder';if(!left)clearInterval(cooldownTimer);};
+ const update=()=>{const left=Math.max(0,Math.ceil((testCooldown-Date.now())/1000));localTestButton.disabled=left>0;localTestButton.textContent=left?'Send another test in '+left+'s':'Send test notification';if(!left)clearInterval(cooldownTimer);};
  update();cooldownTimer=setInterval(update,1000);
 }
 async function watchTest(testId){
@@ -69,7 +69,7 @@ async function watchTest(testId){
   if(test.display_state==='display_requested'){localTestStatus.textContent='Automatic delivery reached this device and requested a notification.';return;}
   if(test.display_state==='display_failed'){localTestStatus.textContent='Automatic delivery reached this device, but the notification could not be displayed.';return;}
  }
- localTestStatus.textContent='The push service accepted the test, but this device did not confirm receipt. Automatic delivery is still not verified.';
+ localTestStatus.textContent='The push service accepted the test. No automatic receipt was returned; if you saw the notification, delivery worked. Otherwise, check Notification Center and the help below.';
 }
 testButton.addEventListener('click',async()=>{
  testButton.disabled=true;statusText.textContent='Creating a notification on this device…';
@@ -88,12 +88,10 @@ testButton.addEventListener('click',async()=>{
 });
 localTestButton.addEventListener('click',async()=>{
  if(!config){localTestStatus.textContent='The reminder service is still connecting. Please try again in a moment.';return;}
- if(localTestButton.disabled)return;let dailyBlocked=false;localTestButton.disabled=true;localTestStatus.textContent='Preparing automatic-delivery test…';
+ if(localTestButton.disabled)return;let dailyBlocked=false;localTestButton.disabled=true;localTestStatus.textContent='Sending test notification…';
  try{
-  registration=await prepareNotificationWorker();
-  const sub=await registration.pushManager.getSubscription();
-  if(!sub)throw Error('The saved push connection is missing. Open the explanation below and repair it.');
-  await saveDevice(sub,device.token);localTestStatus.textContent='Sending automatic-delivery test…';
+  // Setup/repair owns service-worker updates and registration. Send directly
+  // using the authenticated device already stored on the server.
   const result=await api('/api/test','POST',{});startCooldown(result.retryAfter||60);
   localTestStatus.textContent='The push service accepted the test. Waiting for this device to confirm receipt…';
   try{await watchTest(result.testId);}catch{localTestStatus.textContent='The test was accepted, but its receipt could not be checked.';}
@@ -108,17 +106,20 @@ localTestButton.addEventListener('click',async()=>{
 async function scheduledResult(){
  if(!device)return;
  try{const {test}=await api('/api/test/scheduled');if(!test)return;
-  const due=new Date(test.due_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/New_York'});
-  scheduledStatus.textContent=test.error||(test.display_state==='display_requested'?'The scheduled push reached this device and requested a notification. Confirm whether you saw it while the app was closed.':test.display_state==='display_failed'?'The scheduled push reached this device but could not display an alert.':test.display_state?.startsWith('send_failed')||(test.dispatched_at&&test.provider_status!==null&&(test.provider_status<200||test.provider_status>=300))?'The scheduled push could not be sent. Please try again after checking the service.':test.dispatched_at?'The scheduled test was accepted by the push service, but this device has not confirmed it displayed. Check Notification Center.':'Test set for about '+due+'. Close the app now; reopen it after the notification to check the result.');
+  const format=value=>new Date(value).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',second:'2-digit',timeZone:'America/New_York'});
+  const timing=' Eligible at '+format(test.due_at)+' (New York).'+(test.dispatched_at?' Processing started at '+format(test.dispatched_at)+'.':'');
+  const failed=test.display_state?.startsWith('send_failed')||(test.dispatched_at&&test.provider_status!==null&&(test.provider_status<200||test.provider_status>=300));
+  const accepted=test.provider_status>=200&&test.provider_status<300;
+  const message=test.error||(test.display_state==='display_requested'?'The device requested a notification. Confirm whether you saw it while the app was closed.':test.display_state==='display_failed'?'The test reached this device but could not display an alert.':failed?'The scheduled test could not be sent. Check the service and try again.':accepted?'The push service accepted the test. If you saw the alert, delivery worked; an automatic receipt may not be available.':test.dispatched_at?'Sending the scheduled test; provider acceptance is not confirmed yet.':'Waiting for the next background check after the eligible time. '+closeTestHelp);
+  scheduledStatus.textContent=message+timing;
  }catch{}
 }
 scheduledButton.addEventListener('click',async()=>{
  scheduledButton.disabled=true;scheduledStatus.textContent='Scheduling a test for this device…';
- try{registration=await prepareNotificationWorker();const sub=await registration.pushManager.getSubscription();if(!sub)throw Error('The saved push connection is missing. Repair it and try again.');
-  await saveDevice(sub,device.token);
+ try{
   const result=await api('/api/test/scheduled','POST',{});
-  const time=new Date(result.dueAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'America/New_York'});
-  scheduledStatus.textContent='Scheduled for about '+time+'. '+closeTestHelp;
+  const time=new Date(result.dueAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',second:'2-digit',timeZone:'America/New_York'});
+  scheduledStatus.textContent='Eligible at '+time+' (New York); sends on the next background check. Usually about one to two minutes, but delivery can take longer. '+closeTestHelp;
  }catch(error){scheduledStatus.textContent=error.message||'The test could not be scheduled.';}
  finally{scheduledButton.disabled=!config?.scheduler?.testReady;}
 });
@@ -129,7 +130,7 @@ repairButton.addEventListener('click',async()=>{
   await oldSub?.unsubscribe().catch(()=>{});
   const token=localStorage.getItem('campus-pause-token')||base64(crypto.getRandomValues(new Uint8Array(32)));localStorage.setItem('campus-pause-token',token);
   const sub=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:decode(config.publicKey)});
-  await saveDevice(sub,token);repairStatus.textContent='Connection repaired. Now tap “Test automatic reminder.”';
+  await saveDevice(sub,token);repairStatus.textContent='Connection repaired. Now tap “Send test notification.”';
  }catch(error){await api('/api/device','DELETE',{}).catch(()=>{});device=null;localStorage.removeItem('campus-pause-device');state();repairStatus.textContent=error.message||'The connection could not be repaired. Enable notifications again.';}
  finally{repairButton.disabled=false;}
 });

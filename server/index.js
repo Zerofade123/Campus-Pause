@@ -71,7 +71,7 @@ export async function handle(req,env,ctx){
   const now=Date.now(),attemptAt=new Date(now).toISOString(),windowCutoff=new Date(now-86400000).toISOString();
   const claim=await run(env,`UPDATE devices SET last_test=?,test_window_start=CASE WHEN test_window_start IS NULL OR test_window_start<=? THEN ? ELSE test_window_start END,test_count=CASE WHEN test_window_start IS NULL OR test_window_start<=? THEN 1 ELSE test_count+1 END WHERE id=? AND (last_test IS NULL OR last_test<?) AND (test_window_start IS NULL OR test_window_start<=? OR test_count<10)`,attemptAt,windowCutoff,attemptAt,windowCutoff,device.id,new Date(now-60000).toISOString(),windowCutoff);
   if(!claim.meta.changes)fail('Please wait before scheduling another test.',429);
-  const id=crypto.randomUUID(),token=Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join(''),dueAt=new Date(now+3*60000).toISOString();
+  const id=crypto.randomUUID(),token=Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join(''),dueAt=new Date(now+60000).toISOString();
   try{await run(env,'INSERT INTO scheduled_tests(device,id,receipt_token,receipt_hash,due_at) VALUES(?,?,?,?,?) ON CONFLICT(device) DO UPDATE SET id=excluded.id,receipt_token=excluded.receipt_token,receipt_hash=excluded.receipt_hash,due_at=excluded.due_at,dispatched_at=NULL,provider_status=NULL,received_at=NULL,display_state=NULL,worker_version=NULL',device.id,id,token,await digest(token),dueAt);}
   catch(error){await releaseTestClaim(env,device.id,attemptAt);throw error;}
   return json({scheduled:true,id,dueAt});
