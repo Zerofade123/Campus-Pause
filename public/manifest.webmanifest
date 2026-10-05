@@ -1,1 +1,26 @@
-{"name":"Campus Pause · BMCC","short_name":"Campus Pause","start_url":"./","scope":"./","display":"standalone","background_color":"#f5f8fc","theme_color":"#0058a4"}
+{
+  "name": "Campus Pause \u00b7 BMCC",
+  "short_name": "Campus Pause",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f8fc",
+  "theme_color": "#0058a4",
+  "id": "/",
+  "description": "Free BMCC days-off and schedule-change reminders.",
+  "lang": "en",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

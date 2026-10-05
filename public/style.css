@@ -17,3 +17,14 @@ main{padding-top:28px}.intro{margin-bottom:22px}h1{font-size:38px}.next{min-heig
 
 .session-help{font-size:.8125rem;color:#526780;margin:-10px 0 20px;line-height:1.6}.warning{color:#8c3900;font-weight:600}.data-note .text-button{width:auto;padding:8px 0;display:block}.toolbar select{min-width:0}.reminders [hidden]{display:none!important}
 .install-button{margin-top:10px}.install-hint{font-size:.8125rem!important;line-height:1.55!important;color:#526780!important;background:#f0f5fc;padding:10px 12px;border-radius:8px;margin:12px 0 0!important}.dialog-lead{color:#526780;line-height:1.6}.install-steps{padding-left:22px;margin:22px 0 26px}.install-steps li{padding:0 0 16px 8px;line-height:1.45}.install-steps li:last-child{padding-bottom:0}.install-steps b{display:block;color:#172e4c}.install-steps span{display:block;color:#526780;font-size:.875rem;margin-top:3px}dialog h2{font:700 25px/1.25 Manrope;letter-spacing:-.5px;margin:10px 0}.install-button:focus-visible{outline:3px solid #ff6600;outline-offset:4px}
+
+/* Always-visible reminder settings, ahead of diagnostic tests. */
+.reminders .preferences{margin:18px 0;padding:16px;background:#f0f5fc;border:1px solid #d4e1f0;border-radius:12px}
+.preferences h3{font-size:1rem;line-height:1.4;margin:0;color:#173c63}
+.preferences .fine{margin:5px 0 14px}
+.preferences .time-label{margin:0 0 8px;line-height:1.5}
+.preferences select{margin-bottom:0;font-size:1rem}
+.preferences .secondary{margin-top:10px}
+.preferences .text-button{padding-bottom:0;min-height:44px}
+.preferences .saved:not(:empty){margin:10px 0 0;line-height:1.5}
+button:focus-visible,a:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid #0058a4;outline-offset:3px}

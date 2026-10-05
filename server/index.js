@@ -97,7 +97,8 @@ export async function handle(req,env,ctx){
  if(path.startsWith('/api/'))fail('Not found',404);
  if(!['GET','HEAD'].includes(req.method))fail('Method not allowed',405);
  const asset=assets[path==='/'?'/index.html':path];if(!asset)fail('Not found',404);
- return new Response(req.method==='HEAD'?null:asset.content,{headers:{'Content-Type':asset.type,'Cache-Control':'no-cache','X-Content-Type-Options':'nosniff','Referrer-Policy':'strict-origin-when-cross-origin',...(path==='/sw.js'?{'Service-Worker-Allowed':'/'}:{})}});
+ const content=req.method==='HEAD'?null:asset.encoding==='base64'?Uint8Array.from(atob(asset.content),c=>c.charCodeAt(0)):asset.content;
+ return new Response(content,{headers:{'Content-Type':asset.type,'Cache-Control':'no-cache','X-Content-Type-Options':'nosniff','Referrer-Policy':'strict-origin-when-cross-origin',...(path==='/sw.js'?{'Service-Worker-Allowed':'/'}:{}),...(path==='/setup-vapid.html'?{'X-Robots-Tag':'noindex'}:{})}});
 }
 export async function handleSchedule(cron,env){
  if(cron==='* * * * *')return dispatchScheduledTests(env);
