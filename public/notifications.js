@@ -17,7 +17,7 @@ let deferredInstallPrompt=null;
 const installDialog=document.getElementById('install-dialog');
 const installHint=document.getElementById('install-hint');
 let config=null,registration=null,device=null,busy=false;
-try{device=JSON.parse(localStorage.getItem('campus-pause-device')||'null');const hour=localStorage.getItem('campus-pause-time');if(['18','19','20'].includes(hour))document.getElementById('reminder-time').value=hour;}catch{}
+try{device=JSON.parse(localStorage.getItem('campus-pause-device')||'null');testCooldown=Number(localStorage.getItem('campus-pause-test-retry-at'))||0;const hour=localStorage.getItem('campus-pause-time');if(['18','19','20'].includes(hour))document.getElementById('reminder-time').value=hour;}catch{}
 function headers(){return {'Content-Type':'application/json',...(device?{'X-Device-Id':device.id,'Authorization':'Bearer '+device.token}:{})};}
 async function api(path,method='GET',body){const response=await fetch(path,{method,headers:headers(),...(body?{body:JSON.stringify(body)}:{})});const data=await response.json();if(!response.ok)throw Object.assign(Error(data.error),{status:response.status,retryAfter:data.retryAfter,dailyLimit:data.dailyLimit,retryAt:data.retryAt});return data;}
 function state(){
@@ -25,7 +25,7 @@ function state(){
  testButton.hidden=!device;stopButton.hidden=!device;enableButton.hidden=!!device;installButton.hidden=true;installHint.hidden=true;enableButton.disabled=false;
  localTestButton.hidden=!device||!(window.isSecureContext&&'serviceWorker' in navigator&&'Notification' in window&&Notification.permission==='granted'&&(!isIOS||standalone));
  scheduledButton.hidden=localTestButton.hidden;
- scheduledButton.disabled=!config?.scheduler?.testReady;
+ scheduledButton.disabled=!config?.scheduler?.testReady||Date.now()<testCooldown;
  if(!scheduledButton.hidden&&!config?.scheduler?.testReady)scheduledStatus.textContent='Closed-app testing will be available when the background scheduler is connected.';
  repairButton.hidden=!device;
  if(device){statusText.textContent=config?.scheduler?.healthy?'Reminders active for this device.':'Notifications are allowed. You can test delivery; automatic reminders are not active yet.';return;}
@@ -57,8 +57,8 @@ enableButton.addEventListener('click',async()=>{
  finally{busy=false;if(!device)enableButton.disabled=!config;}
 });
 function startCooldown(seconds){
- testCooldown=Date.now()+seconds*1000;clearInterval(cooldownTimer);
- const update=()=>{const left=Math.max(0,Math.ceil((testCooldown-Date.now())/1000));localTestButton.disabled=left>0;localTestButton.textContent=left?'Send another test in '+left+'s':'Send test notification';if(!left)clearInterval(cooldownTimer);};
+ testCooldown=Date.now()+seconds*1000;try{localStorage.setItem('campus-pause-test-retry-at',String(testCooldown));}catch{}clearInterval(cooldownTimer);
+ const update=()=>{const left=Math.max(0,Math.ceil((testCooldown-Date.now())/1000));localTestButton.disabled=left>0;scheduledButton.disabled=left>0||!config?.scheduler?.testReady;const wait=left>=3600?Math.ceil(left/3600)+'h':Math.floor(left/60)+'m '+left%60+'s';localTestButton.textContent=left?'Another server test in '+wait:'Send test notification';scheduledButton.textContent=left?'Another server test in '+wait:'Test after closing the app';if(!left)clearInterval(cooldownTimer);};
  update();cooldownTimer=setInterval(update,1000);
 }
 async function watchTest(testId){
@@ -92,7 +92,7 @@ localTestButton.addEventListener('click',async()=>{
  try{
   // Setup/repair owns service-worker updates and registration. Send directly
   // using the authenticated device already stored on the server.
-  const result=await api('/api/test','POST',{});startCooldown(result.retryAfter||60);
+  const result=await api('/api/test','POST',{});startCooldown(result.retryAfter||300);
   localTestStatus.textContent='The push service accepted the test. Waiting for this device to confirm receipt…';
   try{await watchTest(result.testId);}catch{localTestStatus.textContent='The test was accepted, but its receipt could not be checked.';}
  }catch(error){
@@ -100,28 +100,26 @@ localTestButton.addEventListener('click',async()=>{
   if(!device){localStorage.removeItem('campus-pause-device');state();}
   localTestStatus.textContent=error.message||'The automatic-delivery test could not be completed.';
   if(error.dailyLimit){dailyBlocked=true;localTestButton.disabled=true;localTestButton.textContent='Daily test limit reached';if(error.retryAt)localTestStatus.textContent+=' Try again after '+new Date(error.retryAt).toLocaleString('en-US',{timeZone:'America/New_York',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})+'.';}
-  else if(error.retryAfter)startCooldown(error.retryAfter);
+  if(error.retryAfter)startCooldown(error.retryAfter);
  }finally{if(!dailyBlocked&&Date.now()>=testCooldown)localTestButton.disabled=false;}
 });
 async function scheduledResult(){
  if(!device)return;
  try{const {test}=await api('/api/test/scheduled');if(!test)return;
-  const format=value=>new Date(value).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',second:'2-digit',timeZone:'America/New_York'});
-  const timing=' Eligible at '+format(test.due_at)+' (New York).'+(test.dispatched_at?' Processing started at '+format(test.dispatched_at)+'.':'');
   const failed=test.display_state?.startsWith('send_failed')||(test.dispatched_at&&test.provider_status!==null&&(test.provider_status<200||test.provider_status>=300));
   const accepted=test.provider_status>=200&&test.provider_status<300;
-  const message=test.error||(test.display_state==='display_requested'?'The device requested a notification. Confirm whether you saw it while the app was closed.':test.display_state==='display_failed'?'The test reached this device but could not display an alert.':failed?'The scheduled test could not be sent. Check the service and try again.':accepted?'The push service accepted the test. If you saw the alert, delivery worked; an automatic receipt may not be available.':test.dispatched_at?'Sending the scheduled test; provider acceptance is not confirmed yet.':'Waiting for the next background check after the eligible time. '+closeTestHelp);
-  scheduledStatus.textContent=message+timing;
+  const message=test.error||(test.display_state==='display_requested'?'The device requested a notification. Confirm whether you saw it while the app was closed.':test.display_state==='display_failed'?'The test reached this device but could not display an alert.':failed?'The scheduled test could not be sent. Check the service and try again.':accepted?'The push service accepted the test. If you saw the alert, delivery worked; an automatic receipt may not be available.':test.dispatched_at?'Sending the scheduled test; provider acceptance is not confirmed yet.':'Your test is queued. It usually arrives within a few minutes, but timing varies. '+closeTestHelp);
+  scheduledStatus.textContent=message;
  }catch{}
 }
 scheduledButton.addEventListener('click',async()=>{
- scheduledButton.disabled=true;scheduledStatus.textContent='Scheduling a test for this device…';
+ if(scheduledButton.disabled)return;scheduledButton.disabled=true;scheduledStatus.textContent='Scheduling a test for this device…';
  try{
   const result=await api('/api/test/scheduled','POST',{});
-  const time=new Date(result.dueAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',second:'2-digit',timeZone:'America/New_York'});
-  scheduledStatus.textContent='Eligible at '+time+' (New York); sends on the next background check. Usually about one to two minutes, but delivery can take longer. '+closeTestHelp;
- }catch(error){scheduledStatus.textContent=error.message||'The test could not be scheduled.';}
- finally{scheduledButton.disabled=!config?.scheduler?.testReady;}
+  startCooldown(result.retryAfter||300);
+  scheduledStatus.textContent='Test queued. Close the app now. It usually arrives within a few minutes; the exact arrival time varies. '+closeTestHelp;
+ }catch(error){scheduledStatus.textContent=error.message||'The test could not be scheduled.';if(error.retryAfter)startCooldown(error.retryAfter);}
+ finally{scheduledButton.disabled=!config?.scheduler?.testReady||Date.now()<testCooldown;}
 });
 repairButton.addEventListener('click',async()=>{
  repairButton.disabled=true;repairStatus.textContent='Renewing this device’s push connection…';
@@ -137,4 +135,4 @@ repairButton.addEventListener('click',async()=>{
 stopButton.addEventListener('click',async()=>{stopButton.disabled=true;try{await api('/api/device','DELETE',{});registration=await navigator.serviceWorker.getRegistration();await (await registration?.pushManager.getSubscription())?.unsubscribe();localStorage.removeItem('campus-pause-device');device=null;state();statusText.textContent='Device removed. Reminders are off.';}catch(error){statusText.textContent=error.message;}finally{stopButton.disabled=false;}});
 document.getElementById('save').onclick=async()=>{const saved=document.getElementById('saved-state');try{localStorage.setItem('campus-pause-time',document.getElementById('reminder-time').value);if(device){registration=await navigator.serviceWorker.getRegistration();const sub=await registration?.pushManager.getSubscription();if(!sub)throw Error('Browser registration missing. Stop reminders and enable them again.');await saveDevice(sub,device.token);saved.textContent='Session and time saved to the reminder service.';}else saved.textContent='Preference saved on this device. Enable notifications to register.';}catch(error){saved.textContent=error.message;}};
 document.getElementById('session').addEventListener('change',()=>{if(device)document.getElementById('saved-state').textContent='To change your reminder session too, tap Save reminder preference.';});
-state();window.campusConfig.then(async data=>{config=data;if(device){try{const current=await api('/api/device');config.scheduler=current.scheduler;document.getElementById('reminder-time').value=String(current.hour);}catch(error){if(error.status===401){device=null;localStorage.removeItem('campus-pause-device');}else{statusText.textContent='Could not confirm reminder status. Please try again.';return;}}}state();scheduledResult();}).catch(()=>{statusText.textContent='Reminder service unavailable. Please refresh and try again.';});
+state();window.campusConfig.then(async data=>{config=data;if(device){try{const current=await api('/api/device');config.scheduler=current.scheduler;document.getElementById('reminder-time').value=String(current.hour);}catch(error){if(error.status===401){device=null;localStorage.removeItem('campus-pause-device');}else{statusText.textContent='Could not confirm reminder status. Please try again.';return;}}}state();if(testCooldown>Date.now())startCooldown(Math.ceil((testCooldown-Date.now())/1000));scheduledResult();}).catch(()=>{statusText.textContent='Reminder service unavailable. Please refresh and try again.';});

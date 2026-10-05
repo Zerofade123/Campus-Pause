@@ -35,7 +35,7 @@ test('provider rejection preserves a safe failure code for immediate and schedul
   const result=await worker.fetch(request('/api/test','POST',{},auth),env,{}),body=await result.json();
   assert.equal(result.status,502);assert.match(body.error,/PUSH_AUTH \(HTTP 403\)/);assert.ok(!body.error.includes(env.VAPID_PRIVATE_KEY));
   assert.equal(env.DB.sqlite.prepare('SELECT provider_status FROM push_tests').get().provider_status,403);
-  assert.equal(env.DB.sqlite.prepare('SELECT test_count FROM devices').get().test_count,0);
+  assert.equal(env.DB.sqlite.prepare('SELECT test_count FROM devices').get().test_count,1);
   env.DB.sqlite.prepare('INSERT INTO scheduled_tests(device,id,receipt_token,receipt_hash,due_at) VALUES(?,?,?,?,?)').run(id,'test','receipt','hash',new Date(Date.now()-1000).toISOString());
   assert.equal((await dispatchScheduledTests(env)).failed,1);
   const scheduled=await (await worker.fetch(request('/api/test/scheduled','GET',null,auth),env,{})).json();
@@ -144,27 +144,27 @@ test('encrypted server test decrypts independently and records only authenticate
  }finally{globalThis.fetch=original;}
 });
 
-test('a failed test releases its cooldown; a successful test keeps it',async()=>{
+test('failed and successful tests both keep the five-minute cooldown',async()=>{
  const env={...await credentials(),DB:database()},sub=await subscription(),token=randomBytes(32).toString('base64url');
  const {id}=await (await worker.fetch(request('/api/device','POST',{subscription:sub,token,session:'regular',hour:19}),env,{})).json(),auth={'X-Device-Id':id,Authorization:'Bearer '+token};
  const original=globalThis.fetch;
  try{
-  for(const status of [503,502]){globalThis.fetch=async()=>{if(status===503)throw Error('network failure');return new Response(null,{status:500});};assert.equal((await worker.fetch(request('/api/test','POST',{},auth),env,{})).status,status);const usage=env.DB.sqlite.prepare('SELECT last_test,test_count FROM devices').get();assert.equal(usage.last_test,null);assert.equal(usage.test_count,0);}
+  for(const status of [503,502]){globalThis.fetch=async()=>{if(status===503)throw Error('network failure');return new Response(null,{status:500});};assert.equal((await worker.fetch(request('/api/test','POST',{},auth),env,{})).status,status);const usage=env.DB.sqlite.prepare('SELECT last_test,test_count FROM devices').get();assert.ok(usage.last_test);assert.ok(usage.test_count>=1);const retry=await worker.fetch(request('/api/test','POST',{},auth),env,{});assert.equal(retry.status,429);assert.ok((await retry.json()).retryAfter>=299);env.DB.sqlite.prepare('UPDATE devices SET last_test=NULL WHERE id=?').run(id);}
   globalThis.fetch=async()=>new Response(null,{status:201});assert.equal((await worker.fetch(request('/api/test','POST',{},auth),env,{})).status,200);
-  const blocked=await worker.fetch(request('/api/test','POST',{},auth),env,{});assert.equal(blocked.status,429);assert.ok((await blocked.json()).retryAfter>0);
+  const blocked=await worker.fetch(request('/api/test','POST',{},auth),env,{});assert.equal(blocked.status,429);assert.ok((await blocked.json()).retryAfter>=299);await dispatchScheduledTests(env);const shared=await worker.fetch(request('/api/test/scheduled','POST',{},auth),env,{});assert.equal(shared.status,429);assert.ok((await shared.json()).retryAfter>=299);env.DB.sqlite.prepare('UPDATE devices SET last_test=? WHERE id=?').run(new Date(Date.now()-240000).toISOString(),id);const fourMinutes=await worker.fetch(request('/api/test','POST',{},auth),env,{});assert.equal(fourMinutes.status,429);
  }finally{globalThis.fetch=original;}
 });
 
-test('automatic delivery tests allow ten accepted sends per rolling 24 hours',async()=>{
+test('automatic delivery tests allow five attempts per 24-hour window',async()=>{
  const env={...await credentials(),DB:database()},sub=await subscription(),token=randomBytes(32).toString('base64url');
  const {id}=await (await worker.fetch(request('/api/device','POST',{subscription:sub,token,session:'regular',hour:19}),env,{})).json(),auth={'X-Device-Id':id,Authorization:'Bearer '+token};
  const original=globalThis.fetch;let sends=0;globalThis.fetch=async()=>{sends++;return new Response(null,{status:201});};
  try{
-  for(let n=0;n<10;n++){assert.equal((await worker.fetch(request('/api/test','POST',{},auth),env,{})).status,200);env.DB.sqlite.prepare('UPDATE devices SET last_test=NULL WHERE id=?').run(id);}
-  const blocked=await worker.fetch(request('/api/test','POST',{},auth),env,{}),limit=await blocked.json();assert.equal(blocked.status,429);assert.equal(limit.dailyLimit,true);assert.equal(sends,10);
+  for(let n=0;n<5;n++){assert.equal((await worker.fetch(request('/api/test','POST',{},auth),env,{})).status,200);env.DB.sqlite.prepare('UPDATE devices SET last_test=NULL WHERE id=?').run(id);}
+  const blocked=await worker.fetch(request('/api/test','POST',{},auth),env,{}),limit=await blocked.json();assert.equal(blocked.status,429);assert.equal(limit.dailyLimit,true);assert.equal(sends,5);await dispatchScheduledTests(env);const scheduledLimit=await worker.fetch(request('/api/test/scheduled','POST',{},auth),env,{});assert.equal(scheduledLimit.status,429);assert.equal((await scheduledLimit.json()).dailyLimit,true);
   const renewed={...await subscription(),endpoint:sub.endpoint+'-renewed'},registered=await (await worker.fetch(request('/api/device','POST',{subscription:renewed,token,session:'regular',hour:19}),env,{})).json(),renewedAuth={'X-Device-Id':registered.id,Authorization:'Bearer '+token};
   assert.notEqual(registered.id,id);assert.equal(env.DB.sqlite.prepare('SELECT count(*) n FROM devices WHERE id=?').get(id).n,0);const stillBlocked=await worker.fetch(request('/api/test','POST',{},renewedAuth),env,{});assert.equal(stillBlocked.status,429);assert.equal((await stillBlocked.json()).dailyLimit,true);
   env.DB.sqlite.prepare('UPDATE devices SET test_window_start=?,last_test=NULL WHERE id=?').run(new Date(Date.now()-25*3600000).toISOString(),registered.id);
-  assert.equal((await worker.fetch(request('/api/test','POST',{},renewedAuth),env,{})).status,200);assert.equal(sends,11);assert.equal(env.DB.sqlite.prepare('SELECT test_count FROM devices WHERE id=?').get(registered.id).test_count,1);
+  assert.equal((await worker.fetch(request('/api/test','POST',{},renewedAuth),env,{})).status,200);assert.equal(sends,6);assert.equal(env.DB.sqlite.prepare('SELECT test_count FROM devices WHERE id=?').get(registered.id).test_count,1);
  }finally{globalThis.fetch=original;}
 });
