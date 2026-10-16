@@ -1,3 +1,5 @@
+import {checkWriteLimit,secureResponse} from './security.js';
+import {serveSetupVideo} from './media.js';
 import assets from './assets.generated.js';
 import {sessions,sourceFor,localDate,digest} from './calendar.js';
 import {first,run,all} from './storage.js';
@@ -5,8 +7,16 @@ import {refreshCalendar,validSubscription,push,schedulerState,tick,dispatchSched
 import {pushConfigurationStatus,failureCode,failureMessage} from './push-config.js';
 const json=(value,status=200)=>Response.json(value,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 const fail=(message,status=400)=>{throw Object.assign(Error(message),{status});};
-async function body(req){if(+(req.headers.get('Content-Length')||0)>8192)fail('Request too large',413);const text=await req.text();if(text.length>8192)fail('Request too large',413);try{return JSON.parse(text);}catch{fail('Invalid JSON');}}
-async function authenticate(req,env){const id=req.headers.get('X-Device-Id');const token=req.headers.get('Authorization')?.replace(/^Bearer /,'');if(!id||!token)fail('Device registration not found',401);const device=await first(env,'SELECT * FROM devices WHERE id=?',id);if(!device||device.token_hash!==await digest(token))fail('Device registration not found',401);return device;}
+async function body(req){
+ const limit=8192;
+ if(Number(req.headers.get('Content-Length')||0)>limit)fail('Request too large',413);
+ const reader=req.body?.getReader();let size=0,text='';const decoder=new TextDecoder();
+ if(reader){try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>limit){await reader.cancel();fail('Request too large',413);}text+=decoder.decode(value,{stream:true});}text+=decoder.decode();}finally{reader.releaseLock();}}
+ let parsed;try{parsed=JSON.parse(text);}catch{fail('Invalid JSON');}
+ if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))fail('JSON object required');
+ return parsed;
+}
+async function authenticate(req,env){const id=req.headers.get('X-Device-Id');const token=req.headers.get('Authorization')?.replace(/^Bearer /,'');if(!/^[a-f0-9]{64}$/.test(id||'')||!/^Bearer [A-Za-z0-9_-]{43}$/.test(req.headers.get('Authorization')||''))fail('Device registration not found',401);const device=await first(env,'SELECT * FROM devices WHERE id=?',id);if(!device||device.token_hash!==await digest(token))fail('Device registration not found',401);return device;}
 // Test attempts share a server-enforced allowance, including failed sends.
 async function testLimitResponse(env,id,now){
  const latest=await first(env,'SELECT last_test,test_window_start,test_count FROM devices WHERE id=?',id);
@@ -16,6 +26,7 @@ async function testLimitResponse(env,id,now){
 }
 export async function handle(req,env,ctx){
  const url=new URL(req.url),path=url.pathname;
+ if(path==='/setup/iphone-setup.mp4')return serveSetupVideo(req,env);
  if(path==='/api/jobs/tick'){
   if(req.method!=='POST'||!env.JOB_TOKEN||req.headers.get('Authorization')!=='Bearer '+env.JOB_TOKEN)fail('Not authorized',401);
   return json(await tick(env,{cursor:url.searchParams.get('cursor')||'',force:!url.searchParams.get('cursor')}));
@@ -26,7 +37,8 @@ export async function handle(req,env,ctx){
  }
  if(path.startsWith('/api/')&&req.method!=='GET'){
   if(req.headers.get('Origin')!==url.origin)fail('Request origin not allowed',403);
-  if(!req.headers.get('Content-Type')?.includes('application/json'))fail('JSON required',415);
+  if(req.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase()!=='application/json')fail('JSON required',415);
+  const limited=await checkWriteLimit(req,env);if(limited)return limited;
  }
  if(path==='/api/config'&&req.method==='GET'){const pushConfiguration=await pushConfigurationStatus(env);return json({sessions:sessions.map(({id,label})=>({id,label})),publicKey:pushConfiguration.ready?env.VAPID_PUBLIC_KEY.trim():null,pushConfiguration,scheduler:await schedulerState(env)});}
  if(path==='/api/visit'&&req.method==='POST'){
@@ -117,4 +129,4 @@ export async function handleSchedule(cron,env){
  }
  throw Error('Unknown Cron trigger: '+cron);
 }
-export default {async fetch(req,env,ctx){try{return await handle(req,env,ctx);}catch(error){console.error('request failed',new URL(req.url).pathname,error.status||500);return json({error:error.status?error.message:'Service temporarily unavailable. Please try again.'},error.status||503);}},async scheduled(controller,env,ctx){ctx.waitUntil(handleSchedule(controller.cron,env));}};
+export default {async fetch(req,env,ctx){try{return secureResponse(await handle(req,env,ctx));}catch(error){console.error('request failed',new URL(req.url).pathname,error.status||500);return secureResponse(json({error:error.status?error.message:'Service temporarily unavailable. Please try again.'},error.status||503));}},async scheduled(controller,env,ctx){ctx.waitUntil(handleSchedule(controller.cron,env));}};

@@ -5,20 +5,52 @@
   "keep_vars": true,
   "workers_dev": true,
   "routes": [
-    { "pattern": "pause.zerofadecloud.com", "custom_domain": true }
+    {
+      "pattern": "pause.zerofadecloud.com",
+      "custom_domain": true
+    }
   ],
   "triggers": {
-    "crons": ["* * * * *", "0 * * * *"]
+    "crons": [
+      "* * * * *",
+      "0 * * * *"
+    ]
   },
   "vars": {
     "APP_ORIGIN": "https://pause.zerofadecloud.com",
-    "SCHEDULER_ENABLED": "true"
+    "SCHEDULER_ENABLED": "true",
+    "PUBLIC_LIMITING_ENABLED": "true"
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "campus-pause-prod",
       "database_id": "ef8159c7-62ae-4051-936e-3c9e70a1c96e"
+    }
+  ],
+  "assets": {
+    "directory": "./media",
+    "binding": "MEDIA",
+    "run_worker_first": [
+      "/setup/iphone-setup.mp4"
+    ]
+  },
+  "ratelimits": [
+    {
+      "name": "PUBLIC_WRITE_LIMIT",
+      "namespace_id": "620261501",
+      "simple": {
+        "limit": 120,
+        "period": 60
+      }
+    },
+    {
+      "name": "PUBLIC_TOTAL_LIMIT",
+      "namespace_id": "620261502",
+      "simple": {
+        "limit": 600,
+        "period": 60
+      }
     }
   ]
 }
