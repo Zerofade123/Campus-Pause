@@ -168,3 +168,16 @@ test('automatic delivery tests allow five attempts per 24-hour window',async()=>
   assert.equal((await worker.fetch(request('/api/test','POST',{},renewedAuth),env,{})).status,200);assert.equal(sends,6);assert.equal(env.DB.sqlite.prepare('SELECT test_count FROM devices WHERE id=?').get(registered.id).test_count,1);
  }finally{globalThis.fetch=original;}
 });
+
+test('one registered device cannot read, change or delete another device using its own token',async()=>{
+ const env={...await credentials(),DB:database()};
+ const aToken=randomBytes(32).toString('base64url'),bToken=randomBytes(32).toString('base64url');
+ const a=await subscription(),b=await subscription();b.endpoint+='-second';
+ const aId=(await (await worker.fetch(request('/api/device','POST',{subscription:a,token:aToken,session:'regular',hour:19}),env,{})).json()).id;
+ const bId=(await (await worker.fetch(request('/api/device','POST',{subscription:b,token:bToken,session:'regular',hour:19}),env,{})).json()).id;
+ const auth={'X-Device-Id':bId,Authorization:'Bearer '+aToken};
+ for(const path of ['/api/device','/api/test','/api/test/scheduled'])assert.equal((await worker.fetch(request(path,'GET',null,auth),env,{})).status,401);
+ assert.equal((await worker.fetch(request('/api/device','DELETE',{},auth),env,{})).status,401);
+ assert.equal((await worker.fetch(request('/api/device','POST',{subscription:b,token:aToken,session:'regular',hour:18}),env,{})).status,409);
+ assert.equal(env.DB.sqlite.prepare('SELECT COUNT(*) n FROM devices').get().n,2);assert.notEqual(aId,bId);
+});
