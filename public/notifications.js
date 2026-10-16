@@ -21,7 +21,6 @@ try{device=JSON.parse(localStorage.getItem('campus-pause-device')||'null');testC
 function headers(){return {'Content-Type':'application/json',...(device?{'X-Device-Id':device.id,'Authorization':'Bearer '+device.token}:{})};}
 async function api(path,method='GET',body){const response=await fetch(path,{method,headers:headers(),...(body?{body:JSON.stringify(body)}:{})});const data=await response.json();if(!response.ok)throw Object.assign(Error(data.error),{status:response.status,retryAfter:data.retryAfter,dailyLimit:data.dailyLimit,retryAt:data.retryAt});return data;}
 function state(){
- const guide=document.getElementById('iphone-setup-guide');if(guide)guide.hidden=!isIOS||!!standalone||!!device;
  document.getElementById('notification-tests').hidden=!device;
  document.getElementById('scheduler-note').hidden=!!config?.scheduler?.healthy;
  testButton.hidden=!device;stopButton.hidden=!device;enableButton.hidden=!!device;installButton.hidden=true;installHint.hidden=true;enableButton.disabled=false;
