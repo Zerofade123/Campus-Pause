@@ -36,11 +36,17 @@ button:focus-visible,a:focus-visible,select:focus-visible,summary:focus-visible{
 .notification-help summary{color:#0058a4;text-decoration:underline;text-underline-offset:3px}
 
 /* A compact, visible iPhone walkthrough; the video downloads only on request. */
-.setup-guide{display:flex;align-items:center;justify-content:space-between;gap:20px;border:1px solid #c3d6ec;border-left:4px solid #0058a4;border-radius:12px;background:#edf4fc;padding:18px 20px;margin:0 0 20px}
+.setup-guide{display:grid;grid-template-columns:152px minmax(0,1fr) auto;align-items:center;gap:20px;border:1px solid #c3d6ec;border-left:4px solid #0058a4;border-radius:12px;background:#edf4fc;padding:18px 20px;margin:0 0 20px}
 .setup-guide .eyebrow{margin:0 0 6px;color:#0058a4;font-size:.7rem}
 .setup-guide h2{font-size:1.05rem;margin:0 0 4px;line-height:1.4}
 .setup-guide p{font-size:.875rem;line-height:1.5;margin:0;color:#344f6e}
-.setup-guide img{object-fit:cover;border-radius:8px;border:1px solid #c3d6ec;flex-shrink:0}
+.setup-thumbnail{position:relative;display:block;width:152px;height:96px;padding:0;overflow:hidden;border:1px solid #bfd1e6;border-radius:10px;background:#0b3b68;box-shadow:0 3px 10px #10284414;isolation:isolate}
+.setup-thumbnail img{display:block;width:100%;height:100%;object-fit:cover;object-position:center 35%;opacity:.86}
+.setup-thumbnail::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 30%,#082b5166);z-index:1}
+.thumbnail-play{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:grid;place-items:center;width:42px;height:42px;border-radius:50%;padding-left:3px;background:#fff;color:#0058a4;font-size:17px;box-shadow:0 2px 12px #10284444;z-index:2}
+.thumbnail-duration{position:absolute;right:6px;bottom:6px;padding:3px 5px;border-radius:4px;background:#102844ed;color:#fff;font-size:10px;font-weight:700;z-index:2}
+.setup-thumbnail:hover .thumbnail-play{background:#0058a4;color:#fff}
+.setup-copy{min-width:0}
 .setup-watch{flex-shrink:0;min-height:44px;display:flex;align-items:center;flex-wrap:wrap;gap:8px;background:#0058a4;color:#fff;border:0;border-radius:8px;padding:10px 14px;font-weight:700;font-size:.875rem;text-align:left}
 .setup-duration{font-weight:400;font-size:.75rem}
 .setup-footer-link{color:#0058a4;border:0;background:none;padding:6px 0;font:inherit;text-decoration:underline;text-underline-offset:3px}
@@ -51,4 +57,5 @@ button:focus-visible,a:focus-visible,select:focus-visible,summary:focus-visible{
 #setup-video-steps h3{font-size:1rem;margin-bottom:6px}
 #setup-video-steps ol{padding-left:22px;margin-top:6px}
 #setup-video-steps li{margin-bottom:6px}
-@media(max-width:700px){.setup-guide{flex-direction:column;align-items:stretch;gap:12px;padding:16px}.setup-watch{width:100%;justify-content:center}}
+@media(max-width:900px){.setup-guide{grid-template-columns:112px minmax(0,1fr);gap:14px;padding:16px}.setup-thumbnail{width:112px;height:88px}.setup-guide>.setup-watch{grid-column:1 / -1;width:100%;justify-content:center}}
+@media(max-width:420px){.setup-guide{grid-template-columns:88px minmax(0,1fr);gap:12px}.setup-thumbnail{width:88px;height:88px}.setup-guide h2{font-size:.95rem}.setup-guide p{font-size:.8rem}}
